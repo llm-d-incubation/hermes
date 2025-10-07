@@ -6,10 +6,10 @@ use std::time::Duration;
 use super::{RdmaInfo, TemplateNode, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
-pub struct DeepEpIntranodeTest;
+pub struct DeepEpInternodeTest;
 
 #[derive(Debug, Clone, Serialize)]
-struct DeepEpIntranodeTemplateContext {
+struct DeepEpInternodeTemplateContext {
     test_id: String,
     server_node: TemplateNode,
     client_node: TemplateNode,
@@ -17,24 +17,24 @@ struct DeepEpIntranodeTemplateContext {
     image: String,
 }
 
-impl TestWorkload for DeepEpIntranodeTest {
+impl TestWorkload for DeepEpInternodeTest {
     fn name(&self) -> &str {
-        "deepep-intranode-test"
+        "deepep-internode-test"
     }
 
     fn description(&self) -> &str {
-        "DeepEP intranode MoE expert parallel test on two nodes"
+        "DeepEP internode MoE expert parallel test across two nodes with RDMA"
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(300) // 5 minutes
+        Duration::from_secs(600) // 10 minutes
     }
 
     fn success_criteria(&self) -> Vec<String> {
         vec![
             "Repository cloned successfully".to_string(),
             "GPU detection successful".to_string(),
-            "DeepEP intranode test completed".to_string(),
+            "DeepEP internode test completed".to_string(),
         ]
     }
 
@@ -48,7 +48,7 @@ impl TestWorkload for DeepEpIntranodeTest {
         let server_rdma_device = "none".to_string();
         let client_rdma_device = "none".to_string();
 
-        let context = DeepEpIntranodeTemplateContext {
+        let context = DeepEpInternodeTemplateContext {
             test_id: test_id.to_string(),
             server_node: TemplateNode {
                 name: node_pair.node1.name.clone(),
@@ -63,10 +63,10 @@ impl TestWorkload for DeepEpIntranodeTest {
         };
 
         // render template
-        let template_str = include_str!("../../manifests/05_deepep_intranode/manifest.yaml.j2");
+        let template_str = include_str!("../../manifests/05_deepep_internode/manifest.yaml.j2");
         let mut env = Environment::new();
-        env.add_template("deepep_intranode", template_str)?;
-        let template = env.get_template("deepep_intranode")?;
+        env.add_template("deepep_internode", template_str)?;
+        let template = env.get_template("deepep_internode")?;
         let rendered = template.render(&context)?;
 
         Ok(rendered)

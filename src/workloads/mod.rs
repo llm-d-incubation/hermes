@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::self_test::{NodePair, SelfTestConfig};
 
-pub mod deepep_intranode;
+pub mod deepep_internode;
 pub mod deepep_low_latency;
 pub mod deepgemm_minimal;
 pub mod deepgemm_simple;
@@ -58,7 +58,7 @@ pub fn get_all_workloads() -> Vec<Box<dyn TestWorkload>> {
         Box::new(deepgemm_minimal::DeepGemmMinimalTest),
         Box::new(deepgemm_simple::DeepGemmSimpleTest),
         Box::new(pplx_kernels::PplxKernelsTest),
-        Box::new(deepep_intranode::DeepEpIntranodeTest),
+        Box::new(deepep_internode::DeepEpInternodeTest),
         Box::new(deepep_low_latency::DeepEpLowLatencyTest),
     ]
 }
