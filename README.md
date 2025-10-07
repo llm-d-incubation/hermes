@@ -6,6 +6,29 @@ Supports CoreWeave, GKE, OpenShift, and generic Kubernetes environments.
 
 ## Installation
 
+### From Release Binary
+
+Download the latest release for your platform:
+
+```bash
+# macOS (Apple Silicon)
+curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-aarch64-apple-darwin.tar.gz
+tar xzf hermes-aarch64-apple-darwin.tar.gz
+sudo mv hermes /usr/local/bin/
+
+# macOS (Intel)
+curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-x86_64-apple-darwin.tar.gz
+tar xzf hermes-x86_64-apple-darwin.tar.gz
+sudo mv hermes /usr/local/bin/
+
+# Linux (x86_64)
+curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-x86_64-unknown-linux-gnu.tar.gz
+tar xzf hermes-x86_64-unknown-linux-gnu.tar.gz
+sudo mv hermes /usr/local/bin/
+```
+
+### From Source
+
 ```bash
 cargo install --path .
 ```

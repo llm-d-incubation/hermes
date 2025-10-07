@@ -52,3 +52,13 @@ nixl-self-test-cleanup:
 gen-crds:
     curl -sSL https://raw.githubusercontent.com/openshift/sriov-network-operator/refs/heads/release-4.22/deployment/sriov-network-operator-chart/crds/sriovnetwork.openshift.io_sriovnetworks.yaml | kopium -Af - > src/crds/sriovnetworks.rs
     curl -sSL https://raw.githubusercontent.com/openshift/sriov-network-operator/refs/heads/release-4.22/deployment/sriov-network-operator-chart/crds/sriovnetwork.openshift.io_sriovnetworknodepolicies.yaml | kopium -Af - > src/crds/sriovnetworknodepolicies.rs
+
+# create git tag from Cargo.toml version
+tag-release:
+    #!/usr/bin/env bash
+    set -e
+    VERSION=$(grep -m1 'version = ' Cargo.toml | cut -d'"' -f2)
+    TAG="v${VERSION}"
+    echo "Creating tag ${TAG}..."
+    git tag -a "${TAG}" -m "Release ${TAG}"
+    echo "✅ Tag ${TAG} created. Push with: git push origin ${TAG}"
