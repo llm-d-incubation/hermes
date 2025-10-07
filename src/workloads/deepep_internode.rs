@@ -15,6 +15,7 @@ struct DeepEpInternodeTemplateContext {
     client_node: TemplateNode,
     rdma_resource_type: String,
     image: String,
+    gpu_count: u32,
 }
 
 impl TestWorkload for DeepEpInternodeTest {
@@ -64,6 +65,7 @@ impl TestWorkload for DeepEpInternodeTest {
             },
             rdma_resource_type: rdma_info.rdma_resource_type.clone(),
             image: config.image.clone(),
+            gpu_count: self.required_gpus_per_node(),
         };
 
         // render template

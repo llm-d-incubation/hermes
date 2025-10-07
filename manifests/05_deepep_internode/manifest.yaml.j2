@@ -67,12 +67,12 @@ spec:
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 32Gi
             cpu: "16"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 64Gi
             cpu: "32"
         env:
@@ -143,12 +143,12 @@ spec:
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 32Gi
             cpu: "16"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 64Gi
             cpu: "32"
         env:
