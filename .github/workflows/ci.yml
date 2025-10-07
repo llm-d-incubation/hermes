@@ -35,4 +35,4 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run pre-commit
-        uses: j178/prek-action@v0
+        uses: pre-commit/action@v3.0.1
