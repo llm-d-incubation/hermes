@@ -91,6 +91,10 @@ enum Commands {
             default_value = "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd"
         )]
         image: String,
+
+        /// Override number of GPUs per node (default: use workload's requirement)
+        #[arg(long)]
+        gpus_per_node: Option<u32>,
     },
 }
 
@@ -131,6 +135,7 @@ async fn main() -> Result<()> {
             no_cleanup_on_signal,
             workload,
             image,
+            gpus_per_node,
         } => {
             use hermes::self_test::SelfTestConfig;
             use std::time::Duration;
@@ -147,6 +152,7 @@ async fn main() -> Result<()> {
                 workload,
                 image,
                 load_from,
+                gpus_per_node,
             };
 
             run_self_test(config).await

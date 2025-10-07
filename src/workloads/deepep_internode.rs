@@ -53,6 +53,11 @@ impl TestWorkload for DeepEpInternodeTest {
         let server_rdma_device = "none".to_string();
         let client_rdma_device = "none".to_string();
 
+        // use overridden GPU count from config, or fall back to workload's requirement
+        let gpu_count = config
+            .gpus_per_node
+            .unwrap_or_else(|| self.required_gpus_per_node());
+
         let context = DeepEpInternodeTemplateContext {
             test_id: test_id.to_string(),
             server_node: TemplateNode {
@@ -65,7 +70,7 @@ impl TestWorkload for DeepEpInternodeTest {
             },
             rdma_resource_type: rdma_info.rdma_resource_type.clone(),
             image: config.image.clone(),
-            gpu_count: self.required_gpus_per_node(),
+            gpu_count,
         };
 
         // render template

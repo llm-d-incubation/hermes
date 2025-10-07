@@ -30,6 +30,7 @@ pub struct SelfTestConfig {
     pub workload: Option<String>,
     pub image: String,
     pub load_from: Option<String>,
+    pub gpus_per_node: Option<u32>,
 }
 
 /// Represents a selected node pair for testing
@@ -837,8 +838,11 @@ impl SelfTestOrchestrator {
         cluster_report: &ClusterReport,
         workload: &dyn workloads::TestWorkload,
     ) -> Result<NodePair> {
-        // get GPU requirement from workload
-        let required_gpus = workload.required_gpus_per_node();
+        // get GPU requirement from workload, or use override from config
+        let required_gpus = self
+            .config
+            .gpus_per_node
+            .unwrap_or_else(|| workload.required_gpus_per_node());
 
         // filter to RDMA-capable nodes only
         let mut rdma_nodes: Vec<&NodeInfo> = cluster_report
@@ -1344,6 +1348,7 @@ impl Default for SelfTestConfig {
             workload: None,
             image: "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd".to_string(),
             load_from: None,
+            gpus_per_node: None,
         }
     }
 }
