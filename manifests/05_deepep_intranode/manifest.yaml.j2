@@ -42,10 +42,12 @@ spec:
           echo "DeepEP intranode test completed successfully"
         resources:
           requests:
+            {{ rdma_resource_type }}: "1"
             nvidia.com/gpu: "4"
             memory: 16Gi
             cpu: "8"
           limits:
+            {{ rdma_resource_type }}: "1"
             nvidia.com/gpu: "4"
             memory: 32Gi
             cpu: "16"
@@ -110,10 +112,12 @@ spec:
           echo "DeepEP intranode test completed successfully"
         resources:
           requests:
+            {{ rdma_resource_type }}: "1"
             nvidia.com/gpu: "4"
             memory: 16Gi
             cpu: "8"
           limits:
+            {{ rdma_resource_type }}: "1"
             nvidia.com/gpu: "4"
             memory: 32Gi
             cpu: "16"

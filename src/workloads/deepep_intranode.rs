@@ -13,6 +13,7 @@ struct DeepEpIntranodeTemplateContext {
     test_id: String,
     server_node: TemplateNode,
     client_node: TemplateNode,
+    rdma_resource_type: String,
     image: String,
 }
 
@@ -42,9 +43,8 @@ impl TestWorkload for DeepEpIntranodeTest {
         test_id: &str,
         node_pair: &NodePair,
         config: &SelfTestConfig,
-        _rdma_info: &RdmaInfo,
+        rdma_info: &RdmaInfo,
     ) -> Result<String> {
-        // deepep test doesn't need RDMA devices, just GPU
         let server_rdma_device = "none".to_string();
         let client_rdma_device = "none".to_string();
 
@@ -58,6 +58,7 @@ impl TestWorkload for DeepEpIntranodeTest {
                 name: node_pair.node2.name.clone(),
                 rdma_device: client_rdma_device,
             },
+            rdma_resource_type: rdma_info.rdma_resource_type.clone(),
             image: config.image.clone(),
         };
 
