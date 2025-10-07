@@ -1,0 +1,139 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deepgemm-simple-test-script-{{ test_id }}
+  labels:
+    app: deepgemm-simple-test
+    test-id: "{{ test_id }}"
+data:
+  deepgemm-simple-test.py: |
+{{ deepgemm_simple_test_script }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepgemm-simple-node1-{{ test_id }}
+  labels:
+    app: deepgemm-simple-test
+    role: node1
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: deepgemm-simple-test
+        role: node1
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ server_node.name }}"
+      containers:
+      - name: deepgemm-simple-node1
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting DeepGEMM simple test on node {{ server_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Running DeepGEMM simple test..."
+          python3 /opt/deepgemm-test/deepgemm-simple-test.py --gpu 0
+
+          echo "DeepGEMM simple test completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            memory: 4Gi
+            cpu: "2"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: 8Gi
+            cpu: "4"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: deepgemm-test-script
+          mountPath: /opt/deepgemm-test
+          readOnly: true
+      volumes:
+      - name: deepgemm-test-script
+        configMap:
+          name: deepgemm-simple-test-script-{{ test_id }}
+          defaultMode: 493
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepgemm-simple-node2-{{ test_id }}
+  labels:
+    app: deepgemm-simple-test
+    role: node2
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: deepgemm-simple-test
+        role: node2
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ client_node.name }}"
+      containers:
+      - name: deepgemm-simple-node2
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting DeepGEMM simple test on node {{ client_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Running DeepGEMM simple test..."
+          python3 /opt/deepgemm-test/deepgemm-simple-test.py --gpu 0
+
+          echo "DeepGEMM simple test completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            memory: 4Gi
+            cpu: "2"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: 8Gi
+            cpu: "4"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: deepgemm-test-script
+          mountPath: /opt/deepgemm-test
+          readOnly: true
+      volumes:
+      - name: deepgemm-test-script
+        configMap:
+          name: deepgemm-simple-test-script-{{ test_id }}
+          defaultMode: 493

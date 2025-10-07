@@ -1,0 +1,126 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pplx-kernels-node1-{{ test_id }}
+  labels:
+    app: pplx-kernels-test
+    role: node1
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: pplx-kernels-test
+        role: node1
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ server_node.name }}"
+      containers:
+      - name: pplx-kernels-node1
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting pplx-kernels all-to-all benchmark on node {{ server_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Cloning pplx-kernels repository..."
+          cd /tmp
+          git clone https://github.com/perplexity-ai/pplx-kernels.git || echo "Repository already exists"
+          cd pplx-kernels
+
+          echo "Installing dependencies..."
+          pip install pytest --quiet
+
+          echo "Running all-to-all benchmark..."
+          python -m tests.bench_all_to_all --dp-size 1
+
+          echo "pplx-kernels benchmark completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            memory: 4Gi
+            cpu: "2"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: 8Gi
+            cpu: "4"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pplx-kernels-node2-{{ test_id }}
+  labels:
+    app: pplx-kernels-test
+    role: node2
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: pplx-kernels-test
+        role: node2
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ client_node.name }}"
+      containers:
+      - name: pplx-kernels-node2
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting pplx-kernels all-to-all benchmark on node {{ client_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Cloning pplx-kernels repository..."
+          cd /tmp
+          git clone https://github.com/perplexity-ai/pplx-kernels.git || echo "Repository already exists"
+          cd pplx-kernels
+
+          echo "Installing dependencies..."
+          pip install pytest --quiet
+
+          echo "Running all-to-all benchmark..."
+          python -m tests.bench_all_to_all --dp-size 1
+
+          echo "pplx-kernels benchmark completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            memory: 4Gi
+            cpu: "2"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: 8Gi
+            cpu: "4"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName

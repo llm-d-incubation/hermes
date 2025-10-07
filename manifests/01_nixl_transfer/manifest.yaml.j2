@@ -1,0 +1,246 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nixl-test-script-{{ test_id }}
+  labels:
+    app: nixl-transfer-test
+    test-id: "{{ test_id }}"
+data:
+  nixl-transfer-test.py: |
+{{ nixl_test_script }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nixl-test-target
+  labels:
+    app: nixl-transfer-test
+    role: target
+    test-id: "{{ test_id }}"
+spec:
+  clusterIP: None  # headless service
+  selector:
+    app: nixl-transfer-test
+    role: target
+    test-id: "{{ test_id }}"
+  ports:
+  - name: nixl-transfer
+    port: 18515
+    targetPort: 18515
+    protocol: TCP
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nixl-test-target-{{ test_id }}
+  labels:
+    app: nixl-transfer-test
+    role: target
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: nixl-transfer-test
+        role: target
+        test-id: "{{ test_id }}"
+{% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+{% endif %}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ server_node.name }}"
+      containers:
+      - name: nixl-target
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting NIXL target on node {{ server_node.name }}"
+          echo "Python environment check:"
+          which python3
+          python3 --version
+          echo "Checking installed packages:"
+          uv pip list | grep -i nixl || echo "Warning: NIXL not found in pip list"
+          echo "NIXL module contents:"
+          python3 -c "import nixl; print([x for x in dir(nixl) if not x.startswith('_')])" || echo "Error: Cannot inspect nixl"
+
+          echo "Network configuration:"
+          ip addr show
+
+          echo "RDMA devices:"
+          ls -la /dev/infiniband/ || echo "No infiniband devices found"
+
+          echo "Checking IPC/SHM capabilities:"
+          ls -la /dev/shm/ || echo "No /dev/shm"
+          df -h | grep -E "(shm|tmp)" || echo "No shm mounts"
+          echo ""
+          echo "Container capabilities:"
+          capsh --print || echo "capsh not available"
+          echo ""
+
+          echo "Starting NIXL target script..."
+          /opt/vllm/bin/python3 /opt/nixl-test/nixl-transfer-test.py target 0.0.0.0 18515
+        resources:
+          requests:
+            {{ rdma_resource_type }}: "1"
+            {% if request_gpu -%}
+            nvidia.com/gpu: "1"
+            {% endif -%}
+            memory: 2Gi
+            cpu: "1"
+          limits:
+            {{ rdma_resource_type }}: "1"
+            {% if request_gpu -%}
+            nvidia.com/gpu: "1"
+            {% endif -%}
+            memory: 4Gi
+            cpu: "2"
+        env:
+        # ucx configuration for rdma
+        - name: UCX_LOG_LEVEL
+          value: "info"
+        - name: UCX_ERROR_SIGNALS
+          value: ""
+        - name: UCX_TLS
+          value: "{{ ucx_tls }}"
+        - name: UCX_IB_GID_INDEX
+          value: "{{ ucx_gid_index }}"
+        {% for key, value in extra_env_vars -%}
+        - name: {{ key }}
+          value: "{{ value }}"
+        {% endfor -%}
+        # pod metadata
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: RDMA_DEVICE
+          value: "{{ server_node.rdma_device }}"
+        volumeMounts:
+        - name: nixl-test-script
+          mountPath: /opt/nixl-test
+          readOnly: true
+      volumes:
+      - name: nixl-test-script
+        configMap:
+          name: nixl-test-script-{{ test_id }}
+          defaultMode: 493
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nixl-test-initiator-{{ test_id }}
+  labels:
+    app: nixl-transfer-test
+    role: initiator
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: nixl-transfer-test
+        role: initiator
+        test-id: "{{ test_id }}"
+{% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+{% endif %}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ client_node.name }}"
+      containers:
+      - name: nixl-initiator
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting NIXL initiator on node {{ client_node.name }}"
+          echo "Python environment check:"
+          which python3
+          python3 --version
+          echo "Checking installed packages:"
+          uv pip list | grep -i nixl || echo "Warning: NIXL not found in pip list"
+          echo "NIXL module contents:"
+          python3 -c "import nixl; print([x for x in dir(nixl) if not x.startswith('_')])" || echo "Error: Cannot inspect nixl"
+
+          echo "Network configuration:"
+          ip addr show
+
+          echo "RDMA devices:"
+          ls -la /dev/infiniband/ || echo "No infiniband devices found"
+
+          echo "Waiting 20 seconds for target to be ready..."
+          sleep 20
+
+          echo "Starting NIXL initiator script..."
+          /opt/vllm/bin/python3 /opt/nixl-test/nixl-transfer-test.py initiator {{ server_ip }} 18515
+
+          echo "NIXL transfer test completed"
+        resources:
+          requests:
+            {{ rdma_resource_type }}: "1"
+            {% if request_gpu -%}
+            nvidia.com/gpu: "1"
+            {% endif -%}
+            memory: 2Gi
+            cpu: "1"
+          limits:
+            {{ rdma_resource_type }}: "1"
+            {% if request_gpu -%}
+            nvidia.com/gpu: "1"
+            {% endif -%}
+            memory: 4Gi
+            cpu: "2"
+        env:
+        - name: UCX_LOG_LEVEL
+          value: "debug"
+        - name: UCX_TLS
+          value: "{{ ucx_tls }}"
+        - name: UCX_IB_GID_INDEX
+          value: "{{ ucx_gid_index }}"
+        # target connection info
+        - name: TARGET_HOST
+          value: "{{ server_ip }}"
+        - name: TARGET_PORT
+          value: "18515"
+        # pod metadata
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: RDMA_DEVICE
+          value: "{{ client_node.rdma_device }}"
+        volumeMounts:
+        - name: nixl-test-script
+          mountPath: /opt/nixl-test
+          readOnly: true
+      volumes:
+      - name: nixl-test-script
+        configMap:
+          name: nixl-test-script-{{ test_id }}
+          defaultMode: 493

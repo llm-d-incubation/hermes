@@ -1,0 +1,11 @@
+/target
+.claude/
+
+# environment-specific configuration
+.env
+
+# snapshot tests contain real cluster data
+/snapshots/
+
+# development-specific instructions
+CLAUDE.md

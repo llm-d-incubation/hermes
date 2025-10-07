@@ -1,0 +1,136 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepep-lowlatency-node1-{{ test_id }}
+  labels:
+    app: deepep-lowlatency-test
+    role: node1
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: deepep-lowlatency-test
+        role: node1
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ server_node.name }}"
+      containers:
+      - name: deepep-lowlatency-node1
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting DeepEP low latency test on node {{ server_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Cloning DeepEP repository..."
+          cd /tmp
+          git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
+          cd DeepEP
+
+          echo "Running DeepEP low latency test..."
+          python tests/test_low_latency.py --num-processes 2 --num-tokens 512 --hidden 1024 --num-topk 2 --num-experts 32
+
+          echo "DeepEP low latency test completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "2"
+            memory: 8Gi
+            cpu: "4"
+          limits:
+            nvidia.com/gpu: "2"
+            memory: 16Gi
+            cpu: "8"
+        env:
+        - name: MASTER_ADDR
+          value: "127.0.0.1"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "1"
+        - name: RANK
+          value: "0"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepep-lowlatency-node2-{{ test_id }}
+  labels:
+    app: deepep-lowlatency-test
+    role: node2
+    test-id: "{{ test_id }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app: deepep-lowlatency-test
+        role: node2
+        test-id: "{{ test_id }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ client_node.name }}"
+      containers:
+      - name: deepep-lowlatency-node2
+        image: {{ image }}
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Starting DeepEP low latency test on node {{ client_node.name }}"
+
+          echo "GPU information:"
+          nvidia-smi -L || echo "nvidia-smi not available"
+
+          echo "Cloning DeepEP repository..."
+          cd /tmp
+          git clone https://github.com/AI-Hypercomputer/DeepEP.git || echo "Repository already exists"
+          cd DeepEP
+
+          echo "Running DeepEP low latency test..."
+          python tests/test_low_latency.py --num-processes 2 --num-tokens 512 --hidden 1024 --num-topk 2 --num-experts 32
+
+          echo "DeepEP low latency test completed successfully"
+        resources:
+          requests:
+            nvidia.com/gpu: "2"
+            memory: 8Gi
+            cpu: "4"
+          limits:
+            nvidia.com/gpu: "2"
+            memory: 16Gi
+            cpu: "8"
+        env:
+        - name: MASTER_ADDR
+          value: "127.0.0.1"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "1"
+        - name: RANK
+          value: "0"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
