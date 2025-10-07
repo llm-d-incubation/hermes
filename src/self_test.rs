@@ -1,5 +1,5 @@
 use anyhow::Result;
-use k8s_openapi::api::core::v1::Node;
+use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{Api, Client, api::ListParams};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -598,11 +598,18 @@ impl SelfTestOrchestrator {
         // setup signal handler first
         self.setup_signal_handler().await;
 
+        // load workload first to know GPU requirements
+        let workload = if self.config.from_stdin {
+            self.load_workload_from_stdin().await?
+        } else {
+            self.load_embedded_workload().await?
+        };
+
         println!("Analyzing cluster for optimal RDMA node pairing...");
 
         // analyze cluster and select optimal nodes
         let cluster_report = self.analyze_cluster().await?;
-        let node_pair = self.select_optimal_node_pair(&cluster_report)?;
+        let node_pair = self.select_optimal_node_pair(&cluster_report, workload.as_ref())?;
 
         println!(
             "Selected nodes: {} <-> {}",
@@ -659,13 +666,6 @@ impl SelfTestOrchestrator {
                 tracing::info!("InfiniBand detected, SR-IOV network not required");
             }
         }
-
-        // load or read test workload
-        let workload = if self.config.from_stdin {
-            self.load_workload_from_stdin().await?
-        } else {
-            self.load_embedded_workload().await?
-        };
 
         println!("Deploying test workload: {}", workload.name());
 
@@ -803,6 +803,12 @@ impl SelfTestOrchestrator {
             }
         }
 
+        // fetch all pods to calculate GPU allocation
+        let pods_api: Api<Pod> = Api::all(self.client.clone());
+        if let Ok(pod_list) = pods_api.list(&ListParams::default()).await {
+            ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
+        }
+
         info!(
             "Cluster analysis complete: {} total nodes, {} RDMA-capable",
             cluster_report.total_nodes, cluster_report.rdma_nodes
@@ -811,19 +817,64 @@ impl SelfTestOrchestrator {
         Ok(cluster_report)
     }
 
-    fn select_optimal_node_pair(&self, cluster_report: &ClusterReport) -> Result<NodePair> {
+    /// Check if a node has sufficient free GPUs
+    fn has_sufficient_gpus(node: &NodeInfo, required: u32) -> bool {
+        // if no GPU info available, assume it doesn't have enough
+        let allocatable = match node.gpu_allocatable {
+            Some(a) => a,
+            None => return false,
+        };
+
+        // if no allocation info, conservatively assume all are allocated
+        let allocated = node.gpu_allocated.unwrap_or(allocatable);
+
+        let free = allocatable.saturating_sub(allocated);
+        free >= required
+    }
+
+    fn select_optimal_node_pair(
+        &self,
+        cluster_report: &ClusterReport,
+        workload: &dyn workloads::TestWorkload,
+    ) -> Result<NodePair> {
+        // get GPU requirement from workload
+        let required_gpus = workload.required_gpus_per_node();
+
         // filter to RDMA-capable nodes only
-        let rdma_nodes: Vec<&NodeInfo> = cluster_report
+        let mut rdma_nodes: Vec<&NodeInfo> = cluster_report
             .nodes
             .iter()
             .filter(|node| node.rdma_capable)
             .collect();
 
+        // if workload requires GPUs, filter nodes with sufficient free GPUs
+        if required_gpus > 0 {
+            let nodes_before = rdma_nodes.len();
+            rdma_nodes.retain(|node| Self::has_sufficient_gpus(node, required_gpus));
+
+            if rdma_nodes.len() < nodes_before {
+                info!(
+                    "Filtered {} nodes that don't have {} free GPUs",
+                    nodes_before - rdma_nodes.len(),
+                    required_gpus
+                );
+            }
+        }
+
         if rdma_nodes.len() < 2 {
-            return Err(anyhow::anyhow!(
-                "Need at least 2 RDMA-capable nodes for testing, found: {}",
-                rdma_nodes.len()
-            ));
+            if required_gpus > 0 {
+                return Err(anyhow::anyhow!(
+                    "Need at least 2 RDMA-capable nodes with {} free GPUs for testing, found: {} RDMA nodes, but only {} with sufficient GPUs",
+                    required_gpus,
+                    cluster_report.rdma_nodes,
+                    rdma_nodes.len()
+                ));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Need at least 2 RDMA-capable nodes for testing, found: {}",
+                    rdma_nodes.len()
+                ));
+            }
         }
 
         // group nodes by RDMA device type for compatibility testing

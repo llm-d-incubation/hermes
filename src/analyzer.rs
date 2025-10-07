@@ -29,7 +29,9 @@ impl ClusterAnalyzer {
 
         // check for GPU capability and type
         let capacity = node.status.as_ref().and_then(|s| s.capacity.as_ref());
-        let (gpu_count, gpu_type) = if let Some(cap) = capacity {
+        let allocatable = node.status.as_ref().and_then(|s| s.allocatable.as_ref());
+
+        let (gpu_count, gpu_type, gpu_allocatable) = if let Some(cap) = capacity {
             if let Some(gpu_quantity) = cap.get("nvidia.com/gpu") {
                 let count = gpu_quantity.0.parse::<u32>().unwrap_or(0);
                 let gpu_model = labels
@@ -38,12 +40,19 @@ impl ClusterAnalyzer {
                     .or_else(|| labels.get("cloud.google.com/gke-accelerator"))
                     .cloned()
                     .unwrap_or_else(|| "NVIDIA GPU".to_string());
-                (Some(count), Some(gpu_model))
+
+                // get allocatable GPUs (may be less than capacity due to daemon sets)
+                let alloc_count = allocatable
+                    .and_then(|a| a.get("nvidia.com/gpu"))
+                    .and_then(|q| q.0.parse::<u32>().ok())
+                    .unwrap_or(count);
+
+                (Some(count), Some(gpu_model), Some(alloc_count))
             } else {
-                (None, None)
+                (None, None, None)
             }
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // detect topology block using cluster-wide strategy or platform-specific detection
@@ -130,6 +139,8 @@ impl ClusterAnalyzer {
             node_labels: filtered_labels,
             gpu_count,
             gpu_type,
+            gpu_allocatable,
+            gpu_allocated: None, // will be populated later if needed
             gke_nodepool: platform_info.gke_nodepool,
             gke_machine_family: platform_info.gke_machine_family,
             gke_zone: platform_info.gke_zone,
@@ -272,6 +283,59 @@ impl ClusterAnalyzer {
         }
 
         nics
+    }
+
+    /// Populate GPU allocated counts for each node by querying running pods
+    pub fn populate_gpu_allocations(
+        nodes: &mut [NodeInfo],
+        pods: &[k8s_openapi::api::core::v1::Pod],
+    ) {
+        use std::collections::HashMap;
+
+        // calculate allocated GPUs per node
+        let mut allocated_per_node: HashMap<String, u32> = HashMap::new();
+
+        for pod in pods {
+            // skip pods that are not running or scheduled
+            let phase = pod.status.as_ref().and_then(|s| s.phase.as_ref());
+            if phase != Some(&"Running".to_string()) && phase != Some(&"Pending".to_string()) {
+                continue;
+            }
+
+            // get node name
+            let node_name = match pod.spec.as_ref().and_then(|s| s.node_name.as_ref()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // sum GPU requests from all containers
+            let gpu_requests: u32 = pod
+                .spec
+                .as_ref()
+                .map(|spec| {
+                    spec.containers
+                        .iter()
+                        .filter_map(|container| {
+                            container
+                                .resources
+                                .as_ref()
+                                .and_then(|r| r.requests.as_ref())
+                                .and_then(|req| req.get("nvidia.com/gpu"))
+                                .and_then(|q| q.0.parse::<u32>().ok())
+                        })
+                        .sum()
+                })
+                .unwrap_or(0);
+
+            if gpu_requests > 0 {
+                *allocated_per_node.entry(node_name.clone()).or_insert(0) += gpu_requests;
+            }
+        }
+
+        // update node info with allocated counts
+        for node in nodes.iter_mut() {
+            node.gpu_allocated = allocated_per_node.get(&node.name).copied();
+        }
     }
 }
 

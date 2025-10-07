@@ -47,6 +47,8 @@ pub struct NodeInfo {
     pub node_labels: HashMap<String, String>,
     pub gpu_count: Option<u32>,
     pub gpu_type: Option<String>,
+    pub gpu_allocatable: Option<u32>,
+    pub gpu_allocated: Option<u32>,
     // GKE-specific fields
     pub gke_nodepool: Option<String>,
     pub gke_machine_family: Option<String>,

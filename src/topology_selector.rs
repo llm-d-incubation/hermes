@@ -206,6 +206,8 @@ mod tests {
             node_labels: HashMap::new(),
             gpu_count: Some(8),
             gpu_type: Some("A100".to_string()),
+            gpu_allocatable: Some(8),
+            gpu_allocated: Some(0),
             gke_nodepool: None,
             gke_machine_family: None,
             gke_zone: None,

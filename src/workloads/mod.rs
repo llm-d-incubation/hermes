@@ -38,6 +38,11 @@ pub trait TestWorkload: Send + Sync {
     /// Expected duration for test completion
     fn expected_duration(&self) -> Duration;
 
+    /// Number of GPUs required per node (0 if no GPU requirement)
+    fn required_gpus_per_node(&self) -> u32 {
+        0 // default: no GPU requirement
+    }
+
     /// Success criteria for validation
     fn success_criteria(&self) -> Vec<String>;
 

@@ -30,6 +30,10 @@ impl TestWorkload for DeepEpInternodeTest {
         Duration::from_secs(600) // 10 minutes
     }
 
+    fn required_gpus_per_node(&self) -> u32 {
+        8 // internode test requires 8 local ranks (8 GPUs) per node
+    }
+
     fn success_criteria(&self) -> Vec<String> {
         vec![
             "Repository cloned successfully".to_string(),
