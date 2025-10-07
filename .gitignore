@@ -9,3 +9,7 @@
 
 # development-specific instructions
 CLAUDE.md
+
+# demo files
+*.cast
+*.gif
