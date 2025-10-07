@@ -1,5 +1,8 @@
 # Hermes
 
+> [!NOTE]
+> This project is still incubating and is a proof of concept.
+
 Kubernetes cluster analyzer for RDMA-capable GPU infrastructure. Scans clusters to detect RDMA networking capabilities, GPU topology, and intelligently selects optimal node pairs for high-speed interconnect testing.
 
 Supports CoreWeave, GKE, OpenShift, and generic Kubernetes environments.
