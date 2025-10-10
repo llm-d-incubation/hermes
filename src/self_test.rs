@@ -241,8 +241,14 @@ impl RdmaInterface {
             return interfaces;
         }
 
+        // extract GKE data if available
+        let gke_data = match &node_info.platform_data {
+            crate::models::PlatformSpecificData::Gke(data) => data,
+            _ => return interfaces,
+        };
+
         // GKE has detailed RDMA interface info
-        for gke_iface in &node_info.gke_rdma_interfaces {
+        for gke_iface in &gke_data.rdma_interfaces {
             // convert GKE interface birth_name to device name
             let device_name = if gke_iface.birth_name.contains("rdma") {
                 // convert gpu0rdma0 to mlx5_0
@@ -388,15 +394,18 @@ impl SelectedNode {
                 }
             }
             PlatformType::GKE => {
-                if let Some(ref nodepool) = node_info.gke_nodepool {
-                    platform_specific_info.insert("nodepool".to_string(), nodepool.clone());
-                }
-                if let Some(ref zone) = node_info.gke_zone {
-                    platform_specific_info.insert("zone".to_string(), zone.clone());
-                }
-                if let Some(ref fabric_domain) = node_info.gke_fabric_domain {
-                    platform_specific_info
-                        .insert("fabric_domain".to_string(), fabric_domain.clone());
+                if let crate::models::PlatformSpecificData::Gke(gke_data) = &node_info.platform_data
+                {
+                    if let Some(ref nodepool) = gke_data.nodepool {
+                        platform_specific_info.insert("nodepool".to_string(), nodepool.clone());
+                    }
+                    if let Some(ref zone) = gke_data.zone {
+                        platform_specific_info.insert("zone".to_string(), zone.clone());
+                    }
+                    if let Some(ref fabric_domain) = gke_data.fabric_domain {
+                        platform_specific_info
+                            .insert("fabric_domain".to_string(), fabric_domain.clone());
+                    }
                 }
             }
             _ => {}

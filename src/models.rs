@@ -165,6 +165,25 @@ pub struct TopologyDetection {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PlatformSpecificData {
+    Gke(Box<GkePlatformData>),
+    Generic,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GkePlatformData {
+    pub nodepool: Option<String>,
+    pub machine_family: Option<String>,
+    pub zone: Option<String>,
+    pub rdma_interfaces: Vec<GkeRdmaInterface>,
+    pub pci_topology: Option<String>,
+    pub fabric_domain: Option<String>,
+    pub topology_block: Option<String>,
+    pub topology_subblock: Option<String>,
+    pub topology_host: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeInfo {
     pub name: String,
     pub rdma_capability: RdmaCapability,
@@ -185,16 +204,8 @@ pub struct NodeInfo {
     pub gpu_type: Option<String>,
     pub gpu_allocatable: Option<u32>,
     pub gpu_allocated: Option<u32>,
-    // GKE-specific fields
-    pub gke_nodepool: Option<String>,
-    pub gke_machine_family: Option<String>,
-    pub gke_zone: Option<String>,
-    pub gke_rdma_interfaces: Vec<GkeRdmaInterface>,
-    pub gke_pci_topology: Option<String>,
-    pub gke_fabric_domain: Option<String>,
-    pub gke_topology_block: Option<String>,
-    pub gke_topology_subblock: Option<String>,
-    pub gke_topology_host: Option<String>,
+    // platform-specific data
+    pub platform_data: PlatformSpecificData,
     // image cache tracking
     pub image_cache_status: ImageCacheStatus,
     pub image_cache_checked_at: Option<DateTime<Utc>>,

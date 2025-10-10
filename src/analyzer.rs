@@ -148,6 +148,22 @@ impl ClusterAnalyzer {
             ImageCacheStatus::Unknown
         };
 
+        // construct platform-specific data based on platform type
+        let platform_data = match platform_type {
+            PlatformType::GKE => PlatformSpecificData::Gke(Box::new(GkePlatformData {
+                nodepool: platform_info.gke_nodepool,
+                machine_family: platform_info.gke_machine_family,
+                zone: platform_info.gke_zone,
+                rdma_interfaces: platform_info.gke_rdma_interfaces,
+                pci_topology: platform_info.gke_pci_topology,
+                fabric_domain: platform_info.gke_fabric_domain,
+                topology_block: platform_info.gke_topology_block,
+                topology_subblock: platform_info.gke_topology_subblock,
+                topology_host: platform_info.gke_topology_host,
+            })),
+            _ => PlatformSpecificData::Generic,
+        };
+
         Ok(NodeInfo {
             name,
             rdma_capability,
@@ -168,15 +184,7 @@ impl ClusterAnalyzer {
             gpu_type,
             gpu_allocatable,
             gpu_allocated: None, // will be populated later if needed
-            gke_nodepool: platform_info.gke_nodepool,
-            gke_machine_family: platform_info.gke_machine_family,
-            gke_zone: platform_info.gke_zone,
-            gke_rdma_interfaces: platform_info.gke_rdma_interfaces,
-            gke_pci_topology: platform_info.gke_pci_topology,
-            gke_fabric_domain: platform_info.gke_fabric_domain,
-            gke_topology_block: platform_info.gke_topology_block,
-            gke_topology_subblock: platform_info.gke_topology_subblock,
-            gke_topology_host: platform_info.gke_topology_host,
+            platform_data,
             image_cache_status,
             image_cache_checked_at: if check_image.is_some() {
                 Some(Utc::now())

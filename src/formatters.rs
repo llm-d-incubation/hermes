@@ -432,7 +432,11 @@ impl TableFormatter {
                 Cell::new(node.ib_fabric.as_deref().unwrap_or("-")),
             ]);
         } else if report.platform_type == PlatformType::GKE {
-            row_cells.push(Cell::new(node.gke_nodepool.as_deref().unwrap_or("-")));
+            let nodepool = match &node.platform_data {
+                PlatformSpecificData::Gke(data) => data.nodepool.as_deref().unwrap_or("-"),
+                _ => "-",
+            };
+            row_cells.push(Cell::new(nodepool));
         }
 
         row_cells.extend(vec![
