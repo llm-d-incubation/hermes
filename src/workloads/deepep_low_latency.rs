@@ -20,6 +20,10 @@ impl TestWorkload for DeepEpLowLatencyTest {
         Duration::from_secs(240) // 4 minutes
     }
 
+    fn required_gpus_per_node(&self) -> u32 {
+        1 // internode test requires at least 1 local rank (1 GPU) per node
+    }
+
     fn success_criteria(&self) -> Vec<String> {
         vec![
             "Repository cloned successfully".to_string(),
