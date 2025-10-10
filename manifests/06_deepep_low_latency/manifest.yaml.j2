@@ -31,6 +31,10 @@ spec:
         app: deepep-lowlatency-test
         role: master
         test-id: "{{ test_id }}"
+      {% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+      {% endif %}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -63,19 +67,33 @@ spec:
           export MASTER_PORT=29500
           export WORLD_SIZE=$TOTAL_GPUS
           export RANK=0
+          export PYTHONUNBUFFERED=1
 
-          python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 512 --hidden 1024 --num-topk 2 --num-experts 32
+          echo "Starting Python test script..."
+          echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32"
 
-          echo "DeepEP low latency test completed successfully"
+          python -u tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
+
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          echo "Python test exited with code: $TEST_EXIT_CODE"
+
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "DeepEP low latency test completed successfully"
+          else
+            echo "DeepEP low latency test FAILED with exit code $TEST_EXIT_CODE"
+            echo "Last 50 lines of output:"
+            tail -50 /tmp/test_output.log
+            exit $TEST_EXIT_CODE
+          fi
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "2"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 8Gi
             cpu: "4"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "2"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 16Gi
             cpu: "8"
         env:
@@ -103,6 +121,10 @@ spec:
         app: deepep-lowlatency-test
         role: worker
         test-id: "{{ test_id }}"
+      {% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+      {% endif %}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -142,19 +164,33 @@ spec:
           export MASTER_PORT=29500
           export WORLD_SIZE=$TOTAL_GPUS
           export RANK=$GPU_COUNT
+          export PYTHONUNBUFFERED=1
 
-          python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 512 --hidden 1024 --num-topk 2 --num-experts 32
+          echo "Starting Python test script..."
+          echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32"
 
-          echo "DeepEP low latency test completed successfully"
+          python -u tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
+
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          echo "Python test exited with code: $TEST_EXIT_CODE"
+
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "DeepEP low latency test completed successfully"
+          else
+            echo "DeepEP low latency test FAILED with exit code $TEST_EXIT_CODE"
+            echo "Last 50 lines of output:"
+            tail -50 /tmp/test_output.log
+            exit $TEST_EXIT_CODE
+          fi
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "2"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 8Gi
             cpu: "4"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "2"
+            nvidia.com/gpu: "{{ gpu_count }}"
             memory: 16Gi
             cpu: "8"
         env:
