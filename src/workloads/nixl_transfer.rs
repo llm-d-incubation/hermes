@@ -38,6 +38,7 @@ impl TestWorkload for NixlTransferTest {
     ) -> Result<String> {
         // build context with embedded files
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_server_service("nixl-test-target")
             .with_embedded_files("01_nixl_transfer");
 
         // render template

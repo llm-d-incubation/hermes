@@ -798,7 +798,7 @@ impl SelfTestOrchestrator {
         for node in node_list.items {
             let node_info = ClusterAnalyzer::analyze_node_with_image(
                 &node,
-                LabelDetailLevel::Basic,
+                LabelDetailLevel::Detailed,
                 &cluster_topology_strategy,
                 check_image,
             )?;

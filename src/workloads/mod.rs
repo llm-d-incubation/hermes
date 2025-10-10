@@ -83,11 +83,17 @@ impl TemplateContext {
             request_gpu: config.gpu_requirement.requires_gpu(),
             gpu_count: config.gpus_per_node.unwrap_or(1),
             namespace: config.namespace.clone(),
-            server_ip: format!("nixl-test-target.{}.svc.cluster.local", config.namespace),
+            server_ip: String::new(), // to be set by workload with set_server_service()
             extra_env_vars: std::collections::HashMap::new(),
             configmap_files: std::collections::HashMap::new(),
             extra: std::collections::HashMap::new(),
         }
+    }
+
+    /// set the server service name (used for TARGET_HOST)
+    pub fn with_server_service(mut self, service_name: &str) -> Self {
+        self.server_ip = format!("{}.{}.svc.cluster.local", service_name, self.namespace);
+        self
     }
 
     /// load embedded files for a workload and add to configmap_files
