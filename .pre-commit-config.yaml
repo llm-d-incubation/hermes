@@ -14,3 +14,10 @@ repos:
       - id: fmt
       - id: clippy
         args: ['--all-targets', '--all-features', '--', '-D', 'warnings']
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: ['--severity=warning']
+        files: \.(sh|bash)$

@@ -57,6 +57,8 @@ pub struct TemplateContext {
     pub namespace: String,
     pub server_ip: String,
     pub extra_env_vars: std::collections::HashMap<String, String>,
+    /// embedded files from manifest directory (filename -> base64 content)
+    pub configmap_files: std::collections::HashMap<String, String>,
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -83,8 +85,31 @@ impl TemplateContext {
             namespace: config.namespace.clone(),
             server_ip: format!("nixl-test-target.{}.svc.cluster.local", config.namespace),
             extra_env_vars: std::collections::HashMap::new(),
+            configmap_files: std::collections::HashMap::new(),
             extra: std::collections::HashMap::new(),
         }
+    }
+
+    /// load embedded files for a workload and add to configmap_files
+    pub fn with_embedded_files(mut self, workload_name: &str) -> Self {
+        let files = crate::embedded_files::get_configmap_data(workload_name);
+
+        if files.is_empty() {
+            tracing::warn!(
+                "No embedded files found for workload '{}'. ConfigMap will be empty. \
+                 This may cause the workload to fail at runtime.",
+                workload_name
+            );
+        } else {
+            tracing::debug!(
+                "Loaded {} embedded file(s) for workload '{}'",
+                files.len(),
+                workload_name
+            );
+        }
+
+        self.configmap_files = files;
+        self
     }
 
     /// add extra context variables

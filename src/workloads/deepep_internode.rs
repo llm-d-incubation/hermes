@@ -40,7 +40,8 @@ impl TestWorkload for DeepEpInternodeTest {
         rdma_info: &RdmaInfo,
     ) -> Result<String> {
         // build context using the unified template context
-        let context = TemplateContext::new(test_id, node_pair, config, rdma_info);
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_embedded_files("05_deepep_internode");
 
         // render template
         let template_str = include_str!("../../manifests/05_deepep_internode/manifest.yaml.j2");

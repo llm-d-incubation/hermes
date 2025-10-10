@@ -38,43 +38,7 @@ spec:
       containers:
       - name: pplx-kernels-master
         image: {{ image }}
-        command: ["/bin/bash"]
-        args:
-        - -c
-        - |
-          set -e
-          echo "Starting pplx-kernels all-to-all benchmark (MASTER) on node {{ server_node.name }}"
-
-          echo "GPU information:"
-          nvidia-smi -L
-
-          GPU_COUNT=$(nvidia-smi -L | wc -l)
-          echo "Detected $GPU_COUNT GPUs"
-
-          echo "Cloning pplx-kernels repository..."
-          cd /tmp
-          git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
-          cd pplx-kernels
-
-          echo "Installing pytest to /tmp..."
-          pip install --target=/tmp pytest --quiet
-          export PYTHONPATH=/tmp:$PYTHONPATH
-
-          TOTAL_GPUS=$((GPU_COUNT * 2))
-          DP_SIZE=1
-          echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank 0-$((GPU_COUNT-1)))"
-
-          export MASTER_ADDR=pplx-kernels-master-{{ test_id }}
-          export MASTER_PORT=29500
-          export WORLD_SIZE=$TOTAL_GPUS
-          export WORLD_LOCAL_SIZE=$GPU_COUNT
-          export NODE_RANK=0
-          export RANK=0
-          export LOCAL_RANK=0
-
-          python -m tests.bench_all_to_all --dp-size $DP_SIZE
-
-          echo "pplx-kernels benchmark completed successfully"
+        command: ["/bin/bash", "/opt/pplx-test/master-entrypoint.sh"]
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
@@ -87,6 +51,8 @@ spec:
             memory: 16Gi
             cpu: "8"
         env:
+        - name: TEST_ID
+          value: "{{ test_id }}"
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -118,50 +84,7 @@ spec:
       containers:
       - name: pplx-kernels-worker
         image: {{ image }}
-        command: ["/bin/bash"]
-        args:
-        - -c
-        - |
-          set -e
-          echo "Starting pplx-kernels all-to-all benchmark (WORKER) on node {{ client_node.name }}"
-
-          echo "GPU information:"
-          nvidia-smi -L
-
-          GPU_COUNT=$(nvidia-smi -L | wc -l)
-          echo "Detected $GPU_COUNT GPUs"
-
-          echo "Cloning pplx-kernels repository..."
-          cd /tmp
-          git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
-          cd pplx-kernels
-
-          echo "Installing pytest to /tmp..."
-          pip install --target=/tmp pytest --quiet
-          export PYTHONPATH=/tmp:$PYTHONPATH
-
-          echo "Waiting for master to be ready..."
-          until getent hosts pplx-kernels-master-{{ test_id }}; do
-            echo "Waiting for master service..."
-            sleep 2
-          done
-          sleep 5
-
-          TOTAL_GPUS=$((GPU_COUNT * 2))
-          DP_SIZE=1
-          echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank $GPU_COUNT-$((TOTAL_GPUS-1)))"
-
-          export MASTER_ADDR=pplx-kernels-master-{{ test_id }}
-          export MASTER_PORT=29500
-          export WORLD_SIZE=$TOTAL_GPUS
-          export WORLD_LOCAL_SIZE=$GPU_COUNT
-          export NODE_RANK=1
-          export RANK=$GPU_COUNT
-          export LOCAL_RANK=0
-
-          python -m tests.bench_all_to_all --dp-size $DP_SIZE
-
-          echo "pplx-kernels benchmark completed successfully"
+        command: ["/bin/bash", "/opt/pplx-test/worker-entrypoint.sh"]
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
@@ -174,6 +97,8 @@ spec:
             memory: 16Gi
             cpu: "8"
         env:
+        - name: TEST_ID
+          value: "{{ test_id }}"
         - name: POD_NAME
           valueFrom:
             fieldRef:

@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod cache;
 pub mod crds;
+pub mod embedded_files;
 pub mod formatters;
 pub mod models;
 pub mod platforms;

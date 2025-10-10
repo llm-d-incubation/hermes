@@ -35,26 +35,9 @@ impl TestWorkload for DeepGemmSimpleTest {
         config: &SelfTestConfig,
         rdma_info: &RdmaInfo,
     ) -> Result<String> {
-        // load and indent test script for YAML embedding
-        let test_script =
-            include_str!("../../manifests/03_deepgemm_simple/deepgemm-simple-test.py");
-        let indented_script = test_script
-            .lines()
-            .map(|line| {
-                if line.is_empty() {
-                    String::new()
-                } else {
-                    format!("    {}", line)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
         // build context using the unified template context
-        let context = TemplateContext::new(test_id, node_pair, config, rdma_info).with_extra(
-            "deepgemm_simple_test_script",
-            serde_json::Value::String(indented_script),
-        );
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_embedded_files("03_deepgemm_simple");
 
         // render template
         let template_str = include_str!("../../manifests/03_deepgemm_simple/manifest.yaml.j2");

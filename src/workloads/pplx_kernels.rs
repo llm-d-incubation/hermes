@@ -36,7 +36,8 @@ impl TestWorkload for PplxKernelsTest {
         rdma_info: &RdmaInfo,
     ) -> Result<String> {
         // build context using the unified template context
-        let context = TemplateContext::new(test_id, node_pair, config, rdma_info);
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_embedded_files("04_pplx_kernels");
 
         // render template
         let template_str = include_str!("../../manifests/04_pplx_kernels/manifest.yaml.j2");

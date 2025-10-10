@@ -36,26 +36,9 @@ impl TestWorkload for NixlTransferTest {
         config: &SelfTestConfig,
         rdma_info: &RdmaInfo,
     ) -> Result<String> {
-        // load and indent test script for YAML embedding
-        let nixl_test_script =
-            include_str!("../../manifests/01_nixl_transfer/nixl-transfer-test.py");
-        let indented_script = nixl_test_script
-            .lines()
-            .map(|line| {
-                if line.is_empty() {
-                    String::new()
-                } else {
-                    format!("    {}", line)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // build context using the unified template context
-        let context = TemplateContext::new(test_id, node_pair, config, rdma_info).with_extra(
-            "nixl_test_script",
-            serde_json::Value::String(indented_script),
-        );
+        // build context with embedded files
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_embedded_files("01_nixl_transfer");
 
         // render template
         let template_str = include_str!("../../manifests/01_nixl_transfer/manifest.yaml.j2");
