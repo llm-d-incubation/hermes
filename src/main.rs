@@ -153,6 +153,9 @@ async fn main() -> Result<()> {
                 image,
                 load_from,
                 gpus_per_node,
+                skip_cache_check: false,
+                cache_ttl_seconds: 1800, // 30 minutes
+                cache_check_timeout: Duration::from_secs(5),
             };
 
             run_self_test(config).await
@@ -259,6 +262,8 @@ async fn run_scan(
         gpu_nodes: 0,
         gpu_types: Vec::new(),
         total_gpus: 0,
+        image_checked: None,
+        cache_check_timestamp: None,
     };
 
     for node in node_list.items {

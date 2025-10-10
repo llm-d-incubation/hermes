@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -59,6 +60,9 @@ pub struct NodeInfo {
     pub gke_topology_block: Option<String>,
     pub gke_topology_subblock: Option<String>,
     pub gke_topology_host: Option<String>,
+    // image cache tracking
+    pub has_image_cached: Option<bool>,
+    pub image_cache_checked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -102,6 +106,9 @@ pub struct ClusterReport {
     pub gpu_nodes: usize,
     pub gpu_types: Vec<String>,
     pub total_gpus: u32,
+    // image cache configuration
+    pub image_checked: Option<String>,
+    pub cache_check_timestamp: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Display for PlatformType {

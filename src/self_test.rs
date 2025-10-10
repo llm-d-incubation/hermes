@@ -31,6 +31,10 @@ pub struct SelfTestConfig {
     pub image: String,
     pub load_from: Option<String>,
     pub gpus_per_node: Option<u32>,
+    // image cache detection config
+    pub skip_cache_check: bool,
+    pub cache_ttl_seconds: u64,
+    pub cache_check_timeout: Duration,
 }
 
 /// Represents a selected node pair for testing
@@ -719,11 +723,24 @@ impl SelfTestOrchestrator {
             gpu_nodes: 0,
             gpu_types: Vec::new(),
             total_gpus: 0,
+            image_checked: None,
+            cache_check_timestamp: None,
+        };
+
+        // determine image to check based on config
+        let check_image = if !self.config.skip_cache_check {
+            Some(self.config.image.as_str())
+        } else {
+            None
         };
 
         for node in node_list.items {
-            let node_info =
-                ClusterAnalyzer::analyze_node(&node, false, &cluster_topology_strategy)?;
+            let node_info = ClusterAnalyzer::analyze_node_with_image(
+                &node,
+                false,
+                &cluster_topology_strategy,
+                check_image,
+            )?;
 
             // set cluster topology detection from strategy
             if cluster_report.topology_detection.is_none() {
@@ -808,6 +825,26 @@ impl SelfTestOrchestrator {
         let pods_api: Api<Pod> = Api::all(self.client.clone());
         if let Ok(pod_list) = pods_api.list(&ListParams::default()).await {
             ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
+        }
+
+        // log image cache results if checked
+        if !self.config.skip_cache_check {
+            let cached_count = cluster_report
+                .nodes
+                .iter()
+                .filter(|n| n.has_image_cached == Some(true))
+                .count();
+            info!(
+                "Image cache check complete: {}/{} RDMA nodes have image cached",
+                cached_count,
+                cluster_report.nodes.len()
+            );
+
+            cluster_report.image_checked = Some(self.config.image.clone());
+            cluster_report.cache_check_timestamp = cluster_report
+                .nodes
+                .first()
+                .and_then(|n| n.image_cache_checked_at);
         }
 
         info!(
@@ -1349,6 +1386,9 @@ impl Default for SelfTestConfig {
             image: "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd".to_string(),
             load_from: None,
             gpus_per_node: None,
+            skip_cache_check: false,
+            cache_ttl_seconds: 1800, // 30 minutes
+            cache_check_timeout: Duration::from_secs(5),
         }
     }
 }

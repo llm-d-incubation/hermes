@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use k8s_openapi::api::core::v1::Node;
 use std::collections::{BTreeMap, HashMap};
 
@@ -14,6 +15,21 @@ impl ClusterAnalyzer {
         node: &Node,
         include_detailed_labels: bool,
         cluster_topology_strategy: &Option<TopologyDetection>,
+    ) -> Result<NodeInfo> {
+        Self::analyze_node_with_image(
+            node,
+            include_detailed_labels,
+            cluster_topology_strategy,
+            None,
+        )
+    }
+
+    /// Analyze a single node with optional image cache detection
+    pub fn analyze_node_with_image(
+        node: &Node,
+        include_detailed_labels: bool,
+        cluster_topology_strategy: &Option<TopologyDetection>,
+        check_image: Option<&str>,
     ) -> Result<NodeInfo> {
         let name = node.metadata.name.clone().unwrap_or_default();
         let labels = node.metadata.labels.clone().unwrap_or_default();
@@ -150,6 +166,12 @@ impl ClusterAnalyzer {
             gke_topology_block: platform_info.gke_topology_block,
             gke_topology_subblock: platform_info.gke_topology_subblock,
             gke_topology_host: platform_info.gke_topology_host,
+            has_image_cached: check_image.map(|img| Self::detect_image_in_node(node, img)),
+            image_cache_checked_at: if check_image.is_some() {
+                Some(Utc::now())
+            } else {
+                None
+            },
         })
     }
 
@@ -283,6 +305,35 @@ impl ClusterAnalyzer {
         }
 
         nics
+    }
+
+    /// Detect if a node has a container image cached by checking node.status.images
+    ///
+    /// This is checked directly from the Node object during scan, not via API calls
+    pub fn detect_image_in_node(node: &Node, image: &str) -> bool {
+        if let Some(status) = &node.status
+            && let Some(images) = &status.images
+        {
+            for container_image in images {
+                // check all names for this image (names is a Vec<String>)
+                if let Some(names) = &container_image.names {
+                    for name in names {
+                        if Self::images_match(name, image) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn images_match(image1: &str, image2: &str) -> bool {
+        // handle SHA256 digest matching and tag equivalence
+        image1 == image2
+            || image1.starts_with(image2.split('@').next().unwrap_or(""))
+            || image2.starts_with(image1.split('@').next().unwrap_or(""))
     }
 
     /// Populate GPU allocated counts for each node by querying running pods
