@@ -2,14 +2,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: pplx-kernels-master-{{ test_id }}
+  name: deepep-internode-master-{{ test_id }}
   labels:
-    app: pplx-kernels-test
+    app: deepep-internode-test
     test-id: "{{ test_id }}"
 spec:
   clusterIP: None
   selector:
-    app: pplx-kernels-test
+    app: deepep-internode-test
     role: master
     test-id: "{{ test_id }}"
   ports:
@@ -19,37 +19,41 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pplx-kernels-master-{{ test_id }}
+  name: deepep-internode-master-{{ test_id }}
   labels:
-    app: pplx-kernels-test
+    app: deepep-internode-test
     role: master
     test-id: "{{ test_id }}"
 spec:
   template:
     metadata:
       labels:
-        app: pplx-kernels-test
+        app: deepep-internode-test
         role: master
         test-id: "{{ test_id }}"
+      {% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+      {% endif %}
     spec:
       restartPolicy: Never
       nodeSelector:
         kubernetes.io/hostname: "{{ server_node.name }}"
       containers:
-      - name: pplx-kernels-master
+      - name: deepep-internode-master
         image: {{ image }}
-        command: ["/bin/bash", "/opt/pplx-test/master-entrypoint.sh"]
+        command: ["/bin/bash", "/opt/deepep-test/master-entrypoint.sh"]
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 8Gi
-            cpu: "4"
+            nvidia.com/gpu: "{{ gpu_count }}"
+            memory: 32Gi
+            cpu: "16"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 16Gi
-            cpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
+            memory: 64Gi
+            cpu: "32"
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
@@ -65,37 +69,41 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pplx-kernels-worker-{{ test_id }}
+  name: deepep-internode-worker-{{ test_id }}
   labels:
-    app: pplx-kernels-test
+    app: deepep-internode-test
     role: worker
     test-id: "{{ test_id }}"
 spec:
   template:
     metadata:
       labels:
-        app: pplx-kernels-test
+        app: deepep-internode-test
         role: worker
         test-id: "{{ test_id }}"
+      {% if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+      {% endif %}
     spec:
       restartPolicy: Never
       nodeSelector:
         kubernetes.io/hostname: "{{ client_node.name }}"
       containers:
-      - name: pplx-kernels-worker
+      - name: deepep-internode-worker
         image: {{ image }}
-        command: ["/bin/bash", "/opt/pplx-test/worker-entrypoint.sh"]
+        command: ["/bin/bash", "/opt/deepep-test/worker-entrypoint.sh"]
         resources:
           requests:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 8Gi
-            cpu: "4"
+            nvidia.com/gpu: "{{ gpu_count }}"
+            memory: 32Gi
+            cpu: "16"
           limits:
             {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 16Gi
-            cpu: "8"
+            nvidia.com/gpu: "{{ gpu_count }}"
+            memory: 64Gi
+            cpu: "32"
         env:
         - name: TEST_ID
           value: "{{ test_id }}"

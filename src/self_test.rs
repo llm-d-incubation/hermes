@@ -1,6 +1,7 @@
 use anyhow::Result;
-use k8s_openapi::api::core::v1::Node;
+use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{Api, Client, api::ListParams};
+use minijinja::value::{Object, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -11,25 +12,47 @@ use tracing::info;
 
 use crate::analyzer::ClusterAnalyzer;
 use crate::crds::sriovnetworks::SriovNetwork;
-use crate::models::{ClusterReport, NodeInfo, PlatformType};
+use crate::models::{
+    CleanupMode, ClusterReport, ExecutionMode, GpuRequirement, ImageCacheCheck, LabelDetailLevel,
+    NodeInfo, PlatformType, SignalHandling, WorkloadSource,
+};
 use crate::platforms::*;
 use crate::topology_selector::get_topology_selector;
 use crate::workloads;
 
 /// Configuration for self-test execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SelfTestConfig {
     pub namespace: String,
-    pub from_stdin: bool,
-    pub no_cleanup: bool,
-    pub dry_run: bool,
+    pub workload_source: WorkloadSource,
+    pub cleanup_mode: CleanupMode,
+    pub execution_mode: ExecutionMode,
+    #[serde(skip)]
     pub timeout: Duration,
     pub sriov_network: Option<String>,
-    pub request_gpu: bool,
-    pub cleanup_on_signal: bool,
+    pub gpu_requirement: GpuRequirement,
+    pub signal_handling: SignalHandling,
     pub workload: Option<String>,
     pub image: String,
     pub load_from: Option<String>,
+    pub gpus_per_node: Option<u32>,
+    // image cache detection config
+    pub cache_check: ImageCacheCheck,
+    pub cache_ttl_seconds: u64,
+    #[serde(skip)]
+    pub cache_check_timeout: Duration,
+}
+
+impl Object for SelfTestConfig {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "namespace" => Some(Value::from(self.namespace.clone())),
+            "image" => Some(Value::from(self.image.clone())),
+            "gpus_per_node" => Some(Value::from(self.gpus_per_node)),
+            "gpu_requirement" => Some(Value::from_object(self.gpu_requirement)),
+            _ => None,
+        }
+    }
 }
 
 /// Represents a selected node pair for testing
@@ -40,6 +63,17 @@ pub struct NodePair {
     pub selection_reason: String,
 }
 
+impl Object for NodePair {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "node1" | "server_node" => Some(Value::from_object(self.node1.clone())),
+            "node2" | "client_node" => Some(Value::from_object(self.node2.clone())),
+            "selection_reason" => Some(Value::from(self.selection_reason.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// A node selected for testing with its RDMA capabilities
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectedNode {
@@ -48,6 +82,28 @@ pub struct SelectedNode {
     pub topology_block: Option<String>,
     pub platform_specific_info: HashMap<String, String>,
     pub rdma_resource: Option<String>,
+}
+
+impl Object for SelectedNode {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "name" => Some(Value::from(self.name.clone())),
+            "rdma_device" => {
+                // helper to get the first RDMA device name
+                Some(Value::from(
+                    self.rdma_interfaces
+                        .first()
+                        .map(|i| i.name.clone())
+                        .unwrap_or_else(|| "mlx5_0".to_string()),
+                ))
+            }
+            "rdma_interfaces" => Some(Value::from_serialize(&self.rdma_interfaces)),
+            "topology_block" => Some(Value::from(self.topology_block.clone())),
+            "platform_specific_info" => Some(Value::from_serialize(&self.platform_specific_info)),
+            "rdma_resource" => Some(Value::from(self.rdma_resource.clone())),
+            _ => None,
+        }
+    }
 }
 
 /// RDMA interface information for test workloads
@@ -128,7 +184,7 @@ impl RdmaInterface {
     fn extract_coreweave_rdma(node_info: &NodeInfo) -> Vec<RdmaInterface> {
         let mut interfaces = Vec::new();
 
-        if !node_info.rdma_capable {
+        if !node_info.rdma_capability.is_capable() {
             return interfaces;
         }
 
@@ -163,7 +219,7 @@ impl RdmaInterface {
         }
 
         // fallback if no mellanox NICs found but RDMA capable
-        if interfaces.is_empty() && node_info.rdma_capable {
+        if interfaces.is_empty() && node_info.rdma_capability.is_capable() {
             interfaces.push(RdmaInterface {
                 name: "mlx5_0".to_string(), // common default
                 device_type: device_type.to_string(),
@@ -181,7 +237,7 @@ impl RdmaInterface {
     fn extract_gke_rdma(node_info: &NodeInfo) -> Vec<RdmaInterface> {
         let mut interfaces = Vec::new();
 
-        if !node_info.rdma_capable {
+        if !node_info.rdma_capability.is_capable() {
             return interfaces;
         }
 
@@ -211,7 +267,7 @@ impl RdmaInterface {
         }
 
         // fallback if no detailed interfaces but RDMA capable
-        if interfaces.is_empty() && node_info.rdma_capable {
+        if interfaces.is_empty() && node_info.rdma_capability.is_capable() {
             interfaces.push(RdmaInterface {
                 name: "mlx5_0".to_string(),
                 device_type: "roce".to_string(),
@@ -229,7 +285,7 @@ impl RdmaInterface {
     fn extract_openshift_rdma(node_info: &NodeInfo) -> Vec<RdmaInterface> {
         let mut interfaces = Vec::new();
 
-        if !node_info.rdma_capable {
+        if !node_info.rdma_capability.is_capable() {
             return interfaces;
         }
 
@@ -274,7 +330,7 @@ impl RdmaInterface {
         }
 
         // fallback
-        if interfaces.is_empty() && node_info.rdma_capable {
+        if interfaces.is_empty() && node_info.rdma_capability.is_capable() {
             interfaces.push(RdmaInterface {
                 name: "mlx5_0".to_string(),
                 device_type: device_type.to_string(),
@@ -292,7 +348,7 @@ impl RdmaInterface {
     fn extract_generic_rdma(node_info: &NodeInfo) -> Vec<RdmaInterface> {
         let mut interfaces = Vec::new();
 
-        if !node_info.rdma_capable {
+        if !node_info.rdma_capability.is_capable() {
             return interfaces;
         }
 
@@ -449,7 +505,9 @@ impl SelfTestOrchestrator {
 
     /// Setup signal handler for cleanup on CTRL-C
     async fn setup_signal_handler(&self) {
-        if !self.config.cleanup_on_signal || self.config.dry_run {
+        if !self.config.signal_handling.should_cleanup_on_signal()
+            || self.config.execution_mode.is_dry_run()
+        {
             return;
         }
 
@@ -568,7 +626,7 @@ impl SelfTestOrchestrator {
                 .unwrap_or_else(|| "roce-p2".to_string());
 
             // open up UCX transport list to include GDRCOPY and CUDA IPC if GPU requested
-            let tls = if self.config.request_gpu {
+            let tls = if self.config.gpu_requirement.requires_gpu() {
                 "rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy".to_string()
             } else {
                 "rc,ud,dc,tcp".to_string()
@@ -577,7 +635,7 @@ impl SelfTestOrchestrator {
         } else {
             // for InfiniBand, let UCX auto-select or specify full list
             tracing::info!("Detected InfiniBand, configuring UCX transports");
-            let tls = if self.config.request_gpu {
+            let tls = if self.config.gpu_requirement.requires_gpu() {
                 "rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy".to_string()
             } else {
                 "rc,ud,dc,tcp".to_string()
@@ -598,11 +656,17 @@ impl SelfTestOrchestrator {
         // setup signal handler first
         self.setup_signal_handler().await;
 
+        // load workload first to know GPU requirements
+        let workload = match self.config.workload_source {
+            WorkloadSource::Stdin => self.load_workload_from_stdin().await?,
+            WorkloadSource::Embedded => self.load_embedded_workload().await?,
+        };
+
         println!("Analyzing cluster for optimal RDMA node pairing...");
 
         // analyze cluster and select optimal nodes
         let cluster_report = self.analyze_cluster().await?;
-        let node_pair = self.select_optimal_node_pair(&cluster_report)?;
+        let node_pair = self.select_optimal_node_pair(&cluster_report, workload.as_ref())?;
 
         println!(
             "Selected nodes: {} <-> {}",
@@ -660,20 +724,13 @@ impl SelfTestOrchestrator {
             }
         }
 
-        // load or read test workload
-        let workload = if self.config.from_stdin {
-            self.load_workload_from_stdin().await?
-        } else {
-            self.load_embedded_workload().await?
-        };
-
         println!("Deploying test workload: {}", workload.name());
 
         // execute the test
         let test_execution = self.execute_test(node_pair, workload).await?;
 
         // cleanup unless requested not to
-        if !self.config.no_cleanup && !self.config.dry_run {
+        if self.config.cleanup_mode.should_cleanup() && !self.config.execution_mode.is_dry_run() {
             println!("Cleaning up test resources...");
             self.cleanup_test_resources(&test_execution).await?;
         }
@@ -718,18 +775,31 @@ impl SelfTestOrchestrator {
             gpu_nodes: 0,
             gpu_types: Vec::new(),
             total_gpus: 0,
+            image_checked: None,
+            cache_check_timestamp: None,
+        };
+
+        // determine image to check based on config
+        let check_image = if self.config.cache_check.should_check_cache() {
+            Some(self.config.image.as_str())
+        } else {
+            None
         };
 
         for node in node_list.items {
-            let node_info =
-                ClusterAnalyzer::analyze_node(&node, false, &cluster_topology_strategy)?;
+            let node_info = ClusterAnalyzer::analyze_node_with_image(
+                &node,
+                LabelDetailLevel::Basic,
+                &cluster_topology_strategy,
+                check_image,
+            )?;
 
             // set cluster topology detection from strategy
             if cluster_report.topology_detection.is_none() {
                 cluster_report.topology_detection = cluster_topology_strategy.clone();
             }
 
-            if node_info.rdma_capable {
+            if node_info.rdma_capability.is_capable() {
                 cluster_report.rdma_nodes += 1;
             }
 
@@ -798,9 +868,35 @@ impl SelfTestOrchestrator {
             }
 
             // for self-test, we only care about RDMA-capable nodes
-            if node_info.rdma_capable {
+            if node_info.rdma_capability.is_capable() {
                 cluster_report.nodes.push(node_info);
             }
+        }
+
+        // fetch all pods to calculate GPU allocation
+        let pods_api: Api<Pod> = Api::all(self.client.clone());
+        if let Ok(pod_list) = pods_api.list(&ListParams::default()).await {
+            ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
+        }
+
+        // log image cache results if checked
+        if self.config.cache_check.should_check_cache() {
+            let cached_count = cluster_report
+                .nodes
+                .iter()
+                .filter(|n| n.image_cache_status.is_cached())
+                .count();
+            info!(
+                "Image cache check complete: {}/{} RDMA nodes have image cached",
+                cached_count,
+                cluster_report.nodes.len()
+            );
+
+            cluster_report.image_checked = Some(self.config.image.clone());
+            cluster_report.cache_check_timestamp = cluster_report
+                .nodes
+                .first()
+                .and_then(|n| n.image_cache_checked_at);
         }
 
         info!(
@@ -811,19 +907,67 @@ impl SelfTestOrchestrator {
         Ok(cluster_report)
     }
 
-    fn select_optimal_node_pair(&self, cluster_report: &ClusterReport) -> Result<NodePair> {
+    /// Check if a node has sufficient free GPUs
+    fn has_sufficient_gpus(node: &NodeInfo, required: u32) -> bool {
+        // if no GPU info available, assume it doesn't have enough
+        let allocatable = match node.gpu_allocatable {
+            Some(a) => a,
+            None => return false,
+        };
+
+        // if no allocation info, conservatively assume all are allocated
+        let allocated = node.gpu_allocated.unwrap_or(allocatable);
+
+        let free = allocatable.saturating_sub(allocated);
+        free >= required
+    }
+
+    fn select_optimal_node_pair(
+        &self,
+        cluster_report: &ClusterReport,
+        workload: &dyn workloads::TestWorkload,
+    ) -> Result<NodePair> {
+        // get GPU requirement from workload, or use override from config
+        let required_gpus = self
+            .config
+            .gpus_per_node
+            .unwrap_or_else(|| workload.required_gpus_per_node());
+
         // filter to RDMA-capable nodes only
-        let rdma_nodes: Vec<&NodeInfo> = cluster_report
+        let mut rdma_nodes: Vec<&NodeInfo> = cluster_report
             .nodes
             .iter()
-            .filter(|node| node.rdma_capable)
+            .filter(|node| node.rdma_capability.is_capable())
             .collect();
 
+        // if workload requires GPUs, filter nodes with sufficient free GPUs
+        if required_gpus > 0 {
+            let nodes_before = rdma_nodes.len();
+            rdma_nodes.retain(|node| Self::has_sufficient_gpus(node, required_gpus));
+
+            if rdma_nodes.len() < nodes_before {
+                info!(
+                    "Filtered {} nodes that don't have {} free GPUs",
+                    nodes_before - rdma_nodes.len(),
+                    required_gpus
+                );
+            }
+        }
+
         if rdma_nodes.len() < 2 {
-            return Err(anyhow::anyhow!(
-                "Need at least 2 RDMA-capable nodes for testing, found: {}",
-                rdma_nodes.len()
-            ));
+            if required_gpus > 0 {
+                return Err(anyhow::anyhow!(
+                    "Need at least 2 RDMA-capable nodes with {} free GPUs for testing, found: {} RDMA nodes, but only {} with sufficient GPUs",
+                    required_gpus,
+                    cluster_report.rdma_nodes,
+                    rdma_nodes.len()
+                ));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Need at least 2 RDMA-capable nodes for testing, found: {}",
+                    rdma_nodes.len()
+                ));
+            }
         }
 
         // group nodes by RDMA device type for compatibility testing
@@ -917,7 +1061,7 @@ impl SelfTestOrchestrator {
             results: TestResults::default(),
         };
 
-        if self.config.dry_run {
+        if self.config.execution_mode.is_dry_run() {
             // dry run mode: render manifests to stdout
             self.render_manifests_to_stdout(&test_execution, &*workload)
                 .await?;
@@ -1283,16 +1427,20 @@ impl Default for SelfTestConfig {
     fn default() -> Self {
         Self {
             namespace: "default".to_string(),
-            from_stdin: false,
-            no_cleanup: false,
-            dry_run: false,
+            workload_source: WorkloadSource::Embedded,
+            cleanup_mode: CleanupMode::Cleanup,
+            execution_mode: ExecutionMode::Execute,
             timeout: Duration::from_secs(300), // 5 minutes
             sriov_network: None,
-            request_gpu: true,
-            cleanup_on_signal: true,
+            gpu_requirement: GpuRequirement::Required,
+            signal_handling: SignalHandling::CleanupOnSignal,
             workload: None,
             image: "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd".to_string(),
             load_from: None,
+            gpus_per_node: None,
+            cache_check: ImageCacheCheck::CheckCache,
+            cache_ttl_seconds: 1800, // 30 minutes
+            cache_check_timeout: Duration::from_secs(5),
         }
     }
 }

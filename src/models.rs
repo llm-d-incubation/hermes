@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+use minijinja::value::{Object, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -7,6 +9,140 @@ pub enum PlatformType {
     CoreWeave,
     GKE,
     GenericKubernetes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RdmaCapability {
+    Capable,
+    NotCapable,
+}
+
+impl RdmaCapability {
+    pub fn is_capable(&self) -> bool {
+        matches!(self, Self::Capable)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImageCacheStatus {
+    Cached,
+    NotCached,
+    Unknown,
+}
+
+impl ImageCacheStatus {
+    pub fn is_cached(&self) -> bool {
+        matches!(self, Self::Cached)
+    }
+}
+
+impl From<Option<bool>> for ImageCacheStatus {
+    fn from(value: Option<bool>) -> Self {
+        match value {
+            Some(true) => Self::Cached,
+            Some(false) => Self::NotCached,
+            None => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelDetailLevel {
+    Basic,
+    Detailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeFilter {
+    All,
+    RdmaOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CacheMode {
+    UseCache,
+    SkipCache,
+}
+
+impl CacheMode {
+    pub fn should_use_cache(&self) -> bool {
+        matches!(self, Self::UseCache)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkloadSource {
+    Embedded,
+    Stdin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupMode {
+    Cleanup,
+    NoCleanup,
+}
+
+impl CleanupMode {
+    pub fn should_cleanup(&self) -> bool {
+        matches!(self, Self::Cleanup)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionMode {
+    DryRun,
+    Execute,
+}
+
+impl ExecutionMode {
+    pub fn is_dry_run(&self) -> bool {
+        matches!(self, Self::DryRun)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GpuRequirement {
+    Required,
+    NotRequired,
+}
+
+impl GpuRequirement {
+    pub fn requires_gpu(&self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
+impl Object for GpuRequirement {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "requires_gpu" => Some(Value::from(self.requires_gpu())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignalHandling {
+    CleanupOnSignal,
+    NoCleanupOnSignal,
+}
+
+impl SignalHandling {
+    pub fn should_cleanup_on_signal(&self) -> bool {
+        matches!(self, Self::CleanupOnSignal)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImageCacheCheck {
+    CheckCache,
+    SkipCacheCheck,
+}
+
+impl ImageCacheCheck {
+    pub fn should_check_cache(&self) -> bool {
+        matches!(self, Self::CheckCache)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +167,7 @@ pub struct TopologyDetection {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeInfo {
     pub name: String,
-    pub rdma_capable: bool,
+    pub rdma_capability: RdmaCapability,
     pub rdma_type: Option<String>,
     pub rdma_resource: Option<String>,
     pub platform_type: PlatformType,
@@ -47,6 +183,8 @@ pub struct NodeInfo {
     pub node_labels: HashMap<String, String>,
     pub gpu_count: Option<u32>,
     pub gpu_type: Option<String>,
+    pub gpu_allocatable: Option<u32>,
+    pub gpu_allocated: Option<u32>,
     // GKE-specific fields
     pub gke_nodepool: Option<String>,
     pub gke_machine_family: Option<String>,
@@ -57,6 +195,9 @@ pub struct NodeInfo {
     pub gke_topology_block: Option<String>,
     pub gke_topology_subblock: Option<String>,
     pub gke_topology_host: Option<String>,
+    // image cache tracking
+    pub image_cache_status: ImageCacheStatus,
+    pub image_cache_checked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -100,6 +241,9 @@ pub struct ClusterReport {
     pub gpu_nodes: usize,
     pub gpu_types: Vec<String>,
     pub total_gpus: u32,
+    // image cache configuration
+    pub image_checked: Option<String>,
+    pub cache_check_timestamp: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Display for PlatformType {

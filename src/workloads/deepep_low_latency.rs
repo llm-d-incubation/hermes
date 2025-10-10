@@ -1,20 +1,11 @@
 use anyhow::Result;
 use minijinja::Environment;
-use serde::Serialize;
 use std::time::Duration;
 
-use super::{RdmaInfo, TemplateNode, TestWorkload};
+use super::{RdmaInfo, TemplateContext, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
 pub struct DeepEpLowLatencyTest;
-
-#[derive(Debug, Clone, Serialize)]
-struct DeepEpLowLatencyTemplateContext {
-    test_id: String,
-    server_node: TemplateNode,
-    client_node: TemplateNode,
-    image: String,
-}
 
 impl TestWorkload for DeepEpLowLatencyTest {
     fn name(&self) -> &str {
@@ -27,6 +18,10 @@ impl TestWorkload for DeepEpLowLatencyTest {
 
     fn expected_duration(&self) -> Duration {
         Duration::from_secs(240) // 4 minutes
+    }
+
+    fn required_gpus_per_node(&self) -> u32 {
+        1 // internode test requires at least 1 local rank (1 GPU) per node
     }
 
     fn success_criteria(&self) -> Vec<String> {
@@ -42,24 +37,11 @@ impl TestWorkload for DeepEpLowLatencyTest {
         test_id: &str,
         node_pair: &NodePair,
         config: &SelfTestConfig,
-        _rdma_info: &RdmaInfo,
+        rdma_info: &RdmaInfo,
     ) -> Result<String> {
-        // deepep test doesn't need RDMA devices, just GPU
-        let server_rdma_device = "none".to_string();
-        let client_rdma_device = "none".to_string();
-
-        let context = DeepEpLowLatencyTemplateContext {
-            test_id: test_id.to_string(),
-            server_node: TemplateNode {
-                name: node_pair.node1.name.clone(),
-                rdma_device: server_rdma_device,
-            },
-            client_node: TemplateNode {
-                name: node_pair.node2.name.clone(),
-                rdma_device: client_rdma_device,
-            },
-            image: config.image.clone(),
-        };
+        // build context using the unified template context
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
+            .with_embedded_files("06_deepep_low_latency");
 
         // render template
         let template_str = include_str!("../../manifests/06_deepep_low_latency/manifest.yaml.j2");

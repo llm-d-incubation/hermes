@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use k8s_openapi::api::core::v1::Node;
 use std::collections::{BTreeMap, HashMap};
 
@@ -12,8 +13,18 @@ impl ClusterAnalyzer {
     /// Analyze a single node and extract all relevant information
     pub fn analyze_node(
         node: &Node,
-        include_detailed_labels: bool,
+        detail_level: LabelDetailLevel,
         cluster_topology_strategy: &Option<TopologyDetection>,
+    ) -> Result<NodeInfo> {
+        Self::analyze_node_with_image(node, detail_level, cluster_topology_strategy, None)
+    }
+
+    /// Analyze a single node with optional image cache detection
+    pub fn analyze_node_with_image(
+        node: &Node,
+        detail_level: LabelDetailLevel,
+        cluster_topology_strategy: &Option<TopologyDetection>,
+        check_image: Option<&str>,
     ) -> Result<NodeInfo> {
         let name = node.metadata.name.clone().unwrap_or_default();
         let labels = node.metadata.labels.clone().unwrap_or_default();
@@ -24,12 +35,19 @@ impl ClusterAnalyzer {
         let platform_type = platform_detector.get_platform_type();
 
         // use platform-specific RDMA detection
-        let (rdma_capable, rdma_type, rdma_resource) =
+        let (rdma_cap_bool, rdma_type, rdma_resource) =
             platform_detector.detect_rdma_capability(node);
+        let rdma_capability = if rdma_cap_bool {
+            RdmaCapability::Capable
+        } else {
+            RdmaCapability::NotCapable
+        };
 
         // check for GPU capability and type
         let capacity = node.status.as_ref().and_then(|s| s.capacity.as_ref());
-        let (gpu_count, gpu_type) = if let Some(cap) = capacity {
+        let allocatable = node.status.as_ref().and_then(|s| s.allocatable.as_ref());
+
+        let (gpu_count, gpu_type, gpu_allocatable) = if let Some(cap) = capacity {
             if let Some(gpu_quantity) = cap.get("nvidia.com/gpu") {
                 let count = gpu_quantity.0.parse::<u32>().unwrap_or(0);
                 let gpu_model = labels
@@ -38,12 +56,19 @@ impl ClusterAnalyzer {
                     .or_else(|| labels.get("cloud.google.com/gke-accelerator"))
                     .cloned()
                     .unwrap_or_else(|| "NVIDIA GPU".to_string());
-                (Some(count), Some(gpu_model))
+
+                // get allocatable GPUs (may be less than capacity due to daemon sets)
+                let alloc_count = allocatable
+                    .and_then(|a| a.get("nvidia.com/gpu"))
+                    .and_then(|q| q.0.parse::<u32>().ok())
+                    .unwrap_or(count);
+
+                (Some(count), Some(gpu_model), Some(alloc_count))
             } else {
-                (None, None)
+                (None, None, None)
             }
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // detect topology block using cluster-wide strategy or platform-specific detection
@@ -64,14 +89,15 @@ impl ClusterAnalyzer {
             platform_detector.extract_platform_specific_info(node, &labels, &annotations);
 
         // mellanox NIC detection (only if detailed labels requested)
-        let mellanox_nics = if include_detailed_labels {
+        let mellanox_nics = if detail_level == LabelDetailLevel::Detailed {
             Self::find_mellanox_nics(&labels)
         } else {
             Vec::new()
         };
 
         // collect relevant labels based on mode and platform
-        let filtered_labels: HashMap<String, String> = if include_detailed_labels {
+        let filtered_labels: HashMap<String, String> = if detail_level == LabelDetailLevel::Detailed
+        {
             labels
                 .iter()
                 .filter(|(k, _)| {
@@ -112,9 +138,19 @@ impl ClusterAnalyzer {
                 .collect()
         };
 
+        let image_cache_status = if let Some(img) = check_image {
+            if Self::detect_image_in_node(node, img) {
+                ImageCacheStatus::Cached
+            } else {
+                ImageCacheStatus::NotCached
+            }
+        } else {
+            ImageCacheStatus::Unknown
+        };
+
         Ok(NodeInfo {
             name,
-            rdma_capable,
+            rdma_capability,
             rdma_type,
             rdma_resource,
             platform_type,
@@ -130,6 +166,8 @@ impl ClusterAnalyzer {
             node_labels: filtered_labels,
             gpu_count,
             gpu_type,
+            gpu_allocatable,
+            gpu_allocated: None, // will be populated later if needed
             gke_nodepool: platform_info.gke_nodepool,
             gke_machine_family: platform_info.gke_machine_family,
             gke_zone: platform_info.gke_zone,
@@ -139,6 +177,12 @@ impl ClusterAnalyzer {
             gke_topology_block: platform_info.gke_topology_block,
             gke_topology_subblock: platform_info.gke_topology_subblock,
             gke_topology_host: platform_info.gke_topology_host,
+            image_cache_status,
+            image_cache_checked_at: if check_image.is_some() {
+                Some(Utc::now())
+            } else {
+                None
+            },
         })
     }
 
@@ -273,6 +317,88 @@ impl ClusterAnalyzer {
 
         nics
     }
+
+    /// Detect if a node has a container image cached by checking node.status.images
+    ///
+    /// This is checked directly from the Node object during scan, not via API calls
+    pub fn detect_image_in_node(node: &Node, image: &str) -> bool {
+        if let Some(status) = &node.status
+            && let Some(images) = &status.images
+        {
+            for container_image in images {
+                // check all names for this image (names is a Vec<String>)
+                if let Some(names) = &container_image.names {
+                    for name in names {
+                        if Self::images_match(name, image) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn images_match(image1: &str, image2: &str) -> bool {
+        // handle SHA256 digest matching and tag equivalence
+        image1 == image2
+            || image1.starts_with(image2.split('@').next().unwrap_or(""))
+            || image2.starts_with(image1.split('@').next().unwrap_or(""))
+    }
+
+    /// Populate GPU allocated counts for each node by querying running pods
+    pub fn populate_gpu_allocations(
+        nodes: &mut [NodeInfo],
+        pods: &[k8s_openapi::api::core::v1::Pod],
+    ) {
+        use std::collections::HashMap;
+
+        // calculate allocated GPUs per node
+        let mut allocated_per_node: HashMap<String, u32> = HashMap::new();
+
+        for pod in pods {
+            // skip pods that are not running or scheduled
+            let phase = pod.status.as_ref().and_then(|s| s.phase.as_ref());
+            if phase != Some(&"Running".to_string()) && phase != Some(&"Pending".to_string()) {
+                continue;
+            }
+
+            // get node name
+            let node_name = match pod.spec.as_ref().and_then(|s| s.node_name.as_ref()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // sum GPU requests from all containers
+            let gpu_requests: u32 = pod
+                .spec
+                .as_ref()
+                .map(|spec| {
+                    spec.containers
+                        .iter()
+                        .filter_map(|container| {
+                            container
+                                .resources
+                                .as_ref()
+                                .and_then(|r| r.requests.as_ref())
+                                .and_then(|req| req.get("nvidia.com/gpu"))
+                                .and_then(|q| q.0.parse::<u32>().ok())
+                        })
+                        .sum()
+                })
+                .unwrap_or(0);
+
+            if gpu_requests > 0 {
+                *allocated_per_node.entry(node_name.clone()).or_insert(0) += gpu_requests;
+            }
+        }
+
+        // update node info with allocated counts
+        for node in nodes.iter_mut() {
+            node.gpu_allocated = allocated_per_node.get(&node.name).copied();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -284,7 +410,7 @@ mod tests {
     fn test_analyze_node_gke_with_rdma() {
         // create a mock GKE node with RDMA capabilities
         let node = create_mock_gke_node();
-        let result = ClusterAnalyzer::analyze_node(&node, false, &None).unwrap();
+        let result = ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None).unwrap();
 
         assert_yaml_snapshot!(result, {
             ".node_labels" => insta::sorted_redaction(),

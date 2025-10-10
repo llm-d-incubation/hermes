@@ -5,26 +5,30 @@ use std::time::Duration;
 use super::{RdmaInfo, TemplateContext, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
-pub struct DeepGemmMinimalTest;
+pub struct DeepEpInternodeTest;
 
-impl TestWorkload for DeepGemmMinimalTest {
+impl TestWorkload for DeepEpInternodeTest {
     fn name(&self) -> &str {
-        "deepgemm-minimal-test"
+        "deepep-internode-test"
     }
 
     fn description(&self) -> &str {
-        "DeepGEMM library availability test on two nodes"
+        "DeepEP internode MoE expert parallel test across two nodes with RDMA"
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(120) // 2 minutes
+        Duration::from_secs(600) // 10 minutes
+    }
+
+    fn required_gpus_per_node(&self) -> u32 {
+        8 // internode test requires 8 local ranks (8 GPUs) per node
     }
 
     fn success_criteria(&self) -> Vec<String> {
         vec![
-            "DeepGEMM library imported successfully".to_string(),
-            "CUDA available and working".to_string(),
-            "FP8 tensor operations supported".to_string(),
+            "Repository cloned successfully".to_string(),
+            "GPU detection successful".to_string(),
+            "DeepEP internode test completed".to_string(),
         ]
     }
 
@@ -37,13 +41,13 @@ impl TestWorkload for DeepGemmMinimalTest {
     ) -> Result<String> {
         // build context using the unified template context
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
-            .with_embedded_files("02_deepgemm_minimal");
+            .with_embedded_files("05_deepep_internode");
 
         // render template
-        let template_str = include_str!("../../manifests/02_deepgemm_minimal/manifest.yaml.j2");
+        let template_str = include_str!("../../manifests/05_deepep_internode/manifest.yaml.j2");
         let mut env = Environment::new();
-        env.add_template("deepgemm", template_str)?;
-        let template = env.get_template("deepgemm")?;
+        env.add_template("deepep_internode", template_str)?;
+        let template = env.get_template("deepep_internode")?;
         let rendered = template.render(&context)?;
 
         Ok(rendered)

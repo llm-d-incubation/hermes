@@ -11,6 +11,18 @@ pub trait TopologySelector {
     fn format_selection_reason(&self, rdma_type: &str, topology: &str, is_fallback: bool)
     -> String;
 
+    /// Calculate image cache score for a node pair
+    /// Used as secondary scoring after topology matching
+    fn calculate_cache_score(&self, node1: &NodeInfo, node2: &NodeInfo) -> u8 {
+        use crate::models::ImageCacheStatus;
+
+        match (&node1.image_cache_status, &node2.image_cache_status) {
+            (ImageCacheStatus::Cached, ImageCacheStatus::Cached) => 3, // both cached - best case
+            (ImageCacheStatus::Cached, _) | (_, ImageCacheStatus::Cached) => 2, // one cached
+            _ => 1, // neither cached or unknown - still valid pair
+        }
+    }
+
     /// Select the best node pair from a group of nodes with the same RDMA type
     fn select_same_topology_pair<'a>(
         &self,
@@ -26,15 +38,45 @@ pub trait TopologySelector {
                 acc
             });
 
-        // prefer nodes from the same topology block with multiple nodes
-        let best_topology = topology_groups
-            .iter()
-            .filter(|(_, nodes)| nodes.len() >= 2)
-            .max_by_key(|(_, nodes)| nodes.len());
+        // find best pair across all topology groups
+        let mut best_pair: Option<(&'a NodeInfo, &'a NodeInfo, String, u8)> = None;
 
-        if let Some((topology_key, topology_nodes)) = best_topology {
-            let reason = self.format_selection_reason(rdma_type, topology_key, false);
-            return Ok(Some((topology_nodes[0], topology_nodes[1], reason)));
+        for (topology_key, topology_nodes) in topology_groups.iter() {
+            if topology_nodes.len() >= 2 {
+                // find best pair within this topology group by cache score
+                for i in 0..topology_nodes.len() {
+                    for j in (i + 1)..topology_nodes.len() {
+                        let cache_score =
+                            self.calculate_cache_score(topology_nodes[i], topology_nodes[j]);
+                        let reason = self.format_selection_reason(rdma_type, topology_key, false);
+
+                        if let Some((_, _, _, current_score)) = best_pair {
+                            if cache_score > current_score {
+                                best_pair = Some((
+                                    topology_nodes[i],
+                                    topology_nodes[j],
+                                    reason,
+                                    cache_score,
+                                ));
+                            }
+                        } else {
+                            best_pair =
+                                Some((topology_nodes[i], topology_nodes[j], reason, cache_score));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((node1, node2, mut reason, cache_score)) = best_pair {
+            // append cache score to reason if cache data is available
+            use crate::models::ImageCacheStatus;
+            if !matches!(node1.image_cache_status, ImageCacheStatus::Unknown)
+                || !matches!(node2.image_cache_status, ImageCacheStatus::Unknown)
+            {
+                reason = format!("{} (cache score: {})", reason, cache_score);
+            }
+            return Ok(Some((node1, node2, reason)));
         }
 
         // fallback: any two nodes with same RDMA type
@@ -184,9 +226,11 @@ mod tests {
         leafgroup: Option<&str>,
         topology_block: Option<&str>,
     ) -> NodeInfo {
+        use crate::models::{ImageCacheStatus, RdmaCapability};
+
         NodeInfo {
             name: name.to_string(),
-            rdma_capable: true,
+            rdma_capability: RdmaCapability::Capable,
             rdma_type: Some("RoCE".to_string()),
             rdma_resource: Some("rdma/ib: 1".to_string()),
             platform_type: PlatformType::CoreWeave,
@@ -206,6 +250,8 @@ mod tests {
             node_labels: HashMap::new(),
             gpu_count: Some(8),
             gpu_type: Some("A100".to_string()),
+            gpu_allocatable: Some(8),
+            gpu_allocated: Some(0),
             gke_nodepool: None,
             gke_machine_family: None,
             gke_zone: None,
@@ -215,6 +261,8 @@ mod tests {
             gke_topology_block: None,
             gke_topology_subblock: None,
             gke_topology_host: None,
+            image_cache_status: ImageCacheStatus::Unknown,
+            image_cache_checked_at: None,
         }
     }
 

@@ -6,9 +6,10 @@ metadata:
   labels:
     app: deepgemm-minimal-test
     test-id: "{{ test_id }}"
-data:
-  deepgemm-minimal-test.py: |
-{{ deepgemm_minimal_test_script }}
+binaryData:
+{%- for key, value in configmap_files | items %}
+  {{ key }}: {{ value }}
+{%- endfor %}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -32,20 +33,7 @@ spec:
       containers:
       - name: deepgemm-minimal-node1
         image: {{ image }}
-        command: ["/bin/bash"]
-        args:
-        - -c
-        - |
-          set -e
-          echo "Starting DeepGEMM minimal test on node {{ server_node.name }}"
-
-          echo "GPU information:"
-          nvidia-smi -L || echo "nvidia-smi not available"
-
-          echo "Running DeepGEMM minimal test..."
-          python3 /opt/deepgemm-test/deepgemm-minimal-test.py --gpu 0
-
-          echo "DeepGEMM minimal test completed successfully"
+        command: ["/bin/bash", "/opt/deepgemm-test/node1-entrypoint.sh"]
         resources:
           requests:
             nvidia.com/gpu: "1"
@@ -96,20 +84,7 @@ spec:
       containers:
       - name: deepgemm-minimal-node2
         image: {{ image }}
-        command: ["/bin/bash"]
-        args:
-        - -c
-        - |
-          set -e
-          echo "Starting DeepGEMM minimal test on node {{ client_node.name }}"
-
-          echo "GPU information:"
-          nvidia-smi -L || echo "nvidia-smi not available"
-
-          echo "Running DeepGEMM minimal test..."
-          python3 /opt/deepgemm-test/deepgemm-minimal-test.py --gpu 0
-
-          echo "DeepGEMM minimal test completed successfully"
+        command: ["/bin/bash", "/opt/deepgemm-test/node2-entrypoint.sh"]
         resources:
           requests:
             nvidia.com/gpu: "1"
