@@ -16,6 +16,7 @@ struct DeepEpInternodeTemplateContext {
     rdma_resource_type: String,
     image: String,
     gpu_count: u32,
+    sriov_network: Option<String>,
 }
 
 impl TestWorkload for DeepEpInternodeTest {
@@ -71,6 +72,7 @@ impl TestWorkload for DeepEpInternodeTest {
             rdma_resource_type: rdma_info.rdma_resource_type.clone(),
             image: config.image.clone(),
             gpu_count,
+            sriov_network: rdma_info.sriov_network.clone(),
         };
 
         // render template

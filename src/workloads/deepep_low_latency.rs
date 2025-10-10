@@ -14,7 +14,9 @@ struct DeepEpLowLatencyTemplateContext {
     server_node: TemplateNode,
     client_node: TemplateNode,
     rdma_resource_type: String,
+    sriov_network: Option<String>,
     image: String,
+    gpu_count: u32,
 }
 
 impl TestWorkload for DeepEpLowLatencyTest {
@@ -48,6 +50,8 @@ impl TestWorkload for DeepEpLowLatencyTest {
         let server_rdma_device = "none".to_string();
         let client_rdma_device = "none".to_string();
 
+        let gpu_count = config.gpus_per_node.unwrap_or(1);
+
         let context = DeepEpLowLatencyTemplateContext {
             test_id: test_id.to_string(),
             server_node: TemplateNode {
@@ -59,7 +63,9 @@ impl TestWorkload for DeepEpLowLatencyTest {
                 rdma_device: client_rdma_device,
             },
             rdma_resource_type: rdma_info.rdma_resource_type.clone(),
+            sriov_network: rdma_info.sriov_network.clone(),
             image: config.image.clone(),
+            gpu_count,
         };
 
         // render template
