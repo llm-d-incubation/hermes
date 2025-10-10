@@ -1,6 +1,7 @@
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{Api, Client, api::ListParams};
+use minijinja::value::{Object, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -20,12 +21,13 @@ use crate::topology_selector::get_topology_selector;
 use crate::workloads;
 
 /// Configuration for self-test execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SelfTestConfig {
     pub namespace: String,
     pub workload_source: WorkloadSource,
     pub cleanup_mode: CleanupMode,
     pub execution_mode: ExecutionMode,
+    #[serde(skip)]
     pub timeout: Duration,
     pub sriov_network: Option<String>,
     pub gpu_requirement: GpuRequirement,
@@ -37,7 +39,20 @@ pub struct SelfTestConfig {
     // image cache detection config
     pub cache_check: ImageCacheCheck,
     pub cache_ttl_seconds: u64,
+    #[serde(skip)]
     pub cache_check_timeout: Duration,
+}
+
+impl Object for SelfTestConfig {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "namespace" => Some(Value::from(self.namespace.clone())),
+            "image" => Some(Value::from(self.image.clone())),
+            "gpus_per_node" => Some(Value::from(self.gpus_per_node)),
+            "gpu_requirement" => Some(Value::from_object(self.gpu_requirement)),
+            _ => None,
+        }
+    }
 }
 
 /// Represents a selected node pair for testing
@@ -48,6 +63,17 @@ pub struct NodePair {
     pub selection_reason: String,
 }
 
+impl Object for NodePair {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "node1" | "server_node" => Some(Value::from_object(self.node1.clone())),
+            "node2" | "client_node" => Some(Value::from_object(self.node2.clone())),
+            "selection_reason" => Some(Value::from(self.selection_reason.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// A node selected for testing with its RDMA capabilities
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectedNode {
@@ -56,6 +82,28 @@ pub struct SelectedNode {
     pub topology_block: Option<String>,
     pub platform_specific_info: HashMap<String, String>,
     pub rdma_resource: Option<String>,
+}
+
+impl Object for SelectedNode {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "name" => Some(Value::from(self.name.clone())),
+            "rdma_device" => {
+                // helper to get the first RDMA device name
+                Some(Value::from(
+                    self.rdma_interfaces
+                        .first()
+                        .map(|i| i.name.clone())
+                        .unwrap_or_else(|| "mlx5_0".to_string()),
+                ))
+            }
+            "rdma_interfaces" => Some(Value::from_serialize(&self.rdma_interfaces)),
+            "topology_block" => Some(Value::from(self.topology_block.clone())),
+            "platform_specific_info" => Some(Value::from_serialize(&self.platform_specific_info)),
+            "rdma_resource" => Some(Value::from(self.rdma_resource.clone())),
+            _ => None,
+        }
+    }
 }
 
 /// RDMA interface information for test workloads

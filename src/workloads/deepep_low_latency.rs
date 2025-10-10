@@ -1,23 +1,11 @@
 use anyhow::Result;
 use minijinja::Environment;
-use serde::Serialize;
 use std::time::Duration;
 
-use super::{RdmaInfo, TemplateNode, TestWorkload};
+use super::{RdmaInfo, TemplateContext, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
 pub struct DeepEpLowLatencyTest;
-
-#[derive(Debug, Clone, Serialize)]
-struct DeepEpLowLatencyTemplateContext {
-    test_id: String,
-    server_node: TemplateNode,
-    client_node: TemplateNode,
-    rdma_resource_type: String,
-    sriov_network: Option<String>,
-    image: String,
-    gpu_count: u32,
-}
 
 impl TestWorkload for DeepEpLowLatencyTest {
     fn name(&self) -> &str {
@@ -47,26 +35,8 @@ impl TestWorkload for DeepEpLowLatencyTest {
         config: &SelfTestConfig,
         rdma_info: &RdmaInfo,
     ) -> Result<String> {
-        let server_rdma_device = "none".to_string();
-        let client_rdma_device = "none".to_string();
-
-        let gpu_count = config.gpus_per_node.unwrap_or(1);
-
-        let context = DeepEpLowLatencyTemplateContext {
-            test_id: test_id.to_string(),
-            server_node: TemplateNode {
-                name: node_pair.node1.name.clone(),
-                rdma_device: server_rdma_device,
-            },
-            client_node: TemplateNode {
-                name: node_pair.node2.name.clone(),
-                rdma_device: client_rdma_device,
-            },
-            rdma_resource_type: rdma_info.rdma_resource_type.clone(),
-            sriov_network: rdma_info.sriov_network.clone(),
-            image: config.image.clone(),
-            gpu_count,
-        };
+        // build context using the unified template context
+        let context = TemplateContext::new(test_id, node_pair, config, rdma_info);
 
         // render template
         let template_str = include_str!("../../manifests/06_deepep_low_latency/manifest.yaml.j2");

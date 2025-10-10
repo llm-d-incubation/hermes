@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use minijinja::value::{Object, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -108,6 +109,15 @@ pub enum GpuRequirement {
 impl GpuRequirement {
     pub fn requires_gpu(&self) -> bool {
         matches!(self, Self::Required)
+    }
+}
+
+impl Object for GpuRequirement {
+    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
+        match key.as_str()? {
+            "requires_gpu" => Some(Value::from(self.requires_gpu())),
+            _ => None,
+        }
     }
 }
 
