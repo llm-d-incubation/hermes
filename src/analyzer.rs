@@ -13,21 +13,16 @@ impl ClusterAnalyzer {
     /// Analyze a single node and extract all relevant information
     pub fn analyze_node(
         node: &Node,
-        include_detailed_labels: bool,
+        detail_level: LabelDetailLevel,
         cluster_topology_strategy: &Option<TopologyDetection>,
     ) -> Result<NodeInfo> {
-        Self::analyze_node_with_image(
-            node,
-            include_detailed_labels,
-            cluster_topology_strategy,
-            None,
-        )
+        Self::analyze_node_with_image(node, detail_level, cluster_topology_strategy, None)
     }
 
     /// Analyze a single node with optional image cache detection
     pub fn analyze_node_with_image(
         node: &Node,
-        include_detailed_labels: bool,
+        detail_level: LabelDetailLevel,
         cluster_topology_strategy: &Option<TopologyDetection>,
         check_image: Option<&str>,
     ) -> Result<NodeInfo> {
@@ -40,8 +35,13 @@ impl ClusterAnalyzer {
         let platform_type = platform_detector.get_platform_type();
 
         // use platform-specific RDMA detection
-        let (rdma_capable, rdma_type, rdma_resource) =
+        let (rdma_cap_bool, rdma_type, rdma_resource) =
             platform_detector.detect_rdma_capability(node);
+        let rdma_capability = if rdma_cap_bool {
+            RdmaCapability::Capable
+        } else {
+            RdmaCapability::NotCapable
+        };
 
         // check for GPU capability and type
         let capacity = node.status.as_ref().and_then(|s| s.capacity.as_ref());
@@ -89,14 +89,15 @@ impl ClusterAnalyzer {
             platform_detector.extract_platform_specific_info(node, &labels, &annotations);
 
         // mellanox NIC detection (only if detailed labels requested)
-        let mellanox_nics = if include_detailed_labels {
+        let mellanox_nics = if detail_level == LabelDetailLevel::Detailed {
             Self::find_mellanox_nics(&labels)
         } else {
             Vec::new()
         };
 
         // collect relevant labels based on mode and platform
-        let filtered_labels: HashMap<String, String> = if include_detailed_labels {
+        let filtered_labels: HashMap<String, String> = if detail_level == LabelDetailLevel::Detailed
+        {
             labels
                 .iter()
                 .filter(|(k, _)| {
@@ -137,9 +138,19 @@ impl ClusterAnalyzer {
                 .collect()
         };
 
+        let image_cache_status = if let Some(img) = check_image {
+            if Self::detect_image_in_node(node, img) {
+                ImageCacheStatus::Cached
+            } else {
+                ImageCacheStatus::NotCached
+            }
+        } else {
+            ImageCacheStatus::Unknown
+        };
+
         Ok(NodeInfo {
             name,
-            rdma_capable,
+            rdma_capability,
             rdma_type,
             rdma_resource,
             platform_type,
@@ -166,7 +177,7 @@ impl ClusterAnalyzer {
             gke_topology_block: platform_info.gke_topology_block,
             gke_topology_subblock: platform_info.gke_topology_subblock,
             gke_topology_host: platform_info.gke_topology_host,
-            has_image_cached: check_image.map(|img| Self::detect_image_in_node(node, img)),
+            image_cache_status,
             image_cache_checked_at: if check_image.is_some() {
                 Some(Utc::now())
             } else {
@@ -399,7 +410,7 @@ mod tests {
     fn test_analyze_node_gke_with_rdma() {
         // create a mock GKE node with RDMA capabilities
         let node = create_mock_gke_node();
-        let result = ClusterAnalyzer::analyze_node(&node, false, &None).unwrap();
+        let result = ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None).unwrap();
 
         assert_yaml_snapshot!(result, {
             ".node_labels" => insta::sorted_redaction(),

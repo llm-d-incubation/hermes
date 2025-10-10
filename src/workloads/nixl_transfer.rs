@@ -103,7 +103,7 @@ impl TestWorkload for NixlTransferTest {
             ucx_tls: rdma_info.ucx_tls.clone(),
             ucx_gid_index: rdma_info.ucx_gid_index.clone(),
             sriov_network: rdma_info.sriov_network.clone(),
-            request_gpu: config.request_gpu,
+            request_gpu: config.gpu_requirement.requires_gpu(),
             image: config.image.clone(),
         };
 

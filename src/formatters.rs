@@ -411,7 +411,7 @@ impl TableFormatter {
     }
 
     fn create_node_table_row(&self, node: &NodeInfo, report: &ClusterReport) -> Vec<Cell> {
-        let rdma_cell = if node.rdma_capable {
+        let rdma_cell = if node.rdma_capability.is_capable() {
             Cell::new("Yes").style_spec("Fg")
         } else {
             Cell::new("No").style_spec("Fr")

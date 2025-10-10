@@ -27,9 +27,9 @@ enum Commands {
         #[arg(short, long, default_value = "table")]
         format: String,
 
-        /// Show only nodes with InfiniBand capabilities
+        /// Show only nodes with RDMA capabilities
         #[arg(long)]
-        ib_only: bool,
+        rdma_only: bool,
 
         /// Include detailed platform-specific labels and networking info
         #[arg(long)]
@@ -108,18 +108,34 @@ async fn main() -> Result<()> {
     match args.command {
         Commands::Scan {
             format,
-            ib_only,
+            rdma_only,
             detailed_labels,
             save_to,
             no_cache,
             cache_ttl,
         } => {
+            let node_filter = if rdma_only {
+                NodeFilter::RdmaOnly
+            } else {
+                NodeFilter::All
+            };
+            let detail_level = if detailed_labels {
+                LabelDetailLevel::Detailed
+            } else {
+                LabelDetailLevel::Basic
+            };
+            let cache_mode = if no_cache {
+                CacheMode::SkipCache
+            } else {
+                CacheMode::UseCache
+            };
+
             run_scan(
                 format,
-                ib_only,
-                detailed_labels,
+                node_filter,
+                detail_level,
                 save_to,
-                no_cache,
+                cache_mode,
                 cache_ttl,
             )
             .await
@@ -142,18 +158,38 @@ async fn main() -> Result<()> {
 
             let config = SelfTestConfig {
                 namespace,
-                from_stdin,
-                no_cleanup,
-                dry_run,
+                workload_source: if from_stdin {
+                    WorkloadSource::Stdin
+                } else {
+                    WorkloadSource::Embedded
+                },
+                cleanup_mode: if no_cleanup {
+                    CleanupMode::NoCleanup
+                } else {
+                    CleanupMode::Cleanup
+                },
+                execution_mode: if dry_run {
+                    ExecutionMode::DryRun
+                } else {
+                    ExecutionMode::Execute
+                },
                 timeout: Duration::from_secs(300),
                 sriov_network,
-                request_gpu,
-                cleanup_on_signal: !no_cleanup_on_signal,
+                gpu_requirement: if request_gpu {
+                    GpuRequirement::Required
+                } else {
+                    GpuRequirement::NotRequired
+                },
+                signal_handling: if no_cleanup_on_signal {
+                    SignalHandling::NoCleanupOnSignal
+                } else {
+                    SignalHandling::CleanupOnSignal
+                },
                 workload,
                 image,
                 load_from,
                 gpus_per_node,
-                skip_cache_check: false,
+                cache_check: ImageCacheCheck::CheckCache,
                 cache_ttl_seconds: 1800, // 30 minutes
                 cache_check_timeout: Duration::from_secs(5),
             };
@@ -165,10 +201,10 @@ async fn main() -> Result<()> {
 
 async fn run_scan(
     format: String,
-    ib_only: bool,
-    detailed_labels: bool,
+    node_filter: NodeFilter,
+    detail_level: LabelDetailLevel,
     save_to: Option<String>,
-    no_cache: bool,
+    cache_mode: CacheMode,
     cache_ttl: Option<i64>,
 ) -> Result<()> {
     info!("Starting cluster scan...");
@@ -195,17 +231,21 @@ async fn run_scan(
         (Client::try_from(config.clone())?, config)
     };
 
-    // check cache unless --no-cache is specified
+    // check cache unless cache mode is SkipCache
     let cache_manager = CacheManager::new()?;
     let context_key = CacheManager::generate_context_key(&config);
 
-    if !no_cache && let Some(cached_report) = cache_manager.load(&context_key, cache_ttl)? {
+    if cache_mode.should_use_cache()
+        && let Some(cached_report) = cache_manager.load(&context_key, cache_ttl)?
+    {
         // use cached report
         let mut cluster_report = cached_report;
 
-        // apply ib_only filter if requested
-        if ib_only {
-            cluster_report.nodes.retain(|node| node.rdma_capable);
+        // apply RDMA filter if requested
+        if matches!(node_filter, NodeFilter::RdmaOnly) {
+            cluster_report
+                .nodes
+                .retain(|node| node.rdma_capability.is_capable());
         }
 
         // save to file if requested
@@ -268,14 +308,14 @@ async fn run_scan(
 
     for node in node_list.items {
         let node_info =
-            ClusterAnalyzer::analyze_node(&node, detailed_labels, &cluster_topology_strategy)?;
+            ClusterAnalyzer::analyze_node(&node, detail_level, &cluster_topology_strategy)?;
 
         // set cluster topology detection from strategy
         if cluster_report.topology_detection.is_none() {
             cluster_report.topology_detection = cluster_topology_strategy.clone();
         }
 
-        if node_info.rdma_capable {
+        if node_info.rdma_capability.is_capable() {
             cluster_report.rdma_nodes += 1;
         }
 
@@ -342,8 +382,14 @@ async fn run_scan(
             cluster_report.leafgroups.push(leafgroup.clone());
         }
 
-        if !ib_only || node_info.rdma_capable {
-            cluster_report.nodes.push(node_info);
+        match node_filter {
+            NodeFilter::RdmaOnly if node_info.rdma_capability.is_capable() => {
+                cluster_report.nodes.push(node_info);
+            }
+            NodeFilter::All => {
+                cluster_report.nodes.push(node_info);
+            }
+            _ => {}
         }
     }
 
@@ -356,8 +402,8 @@ async fn run_scan(
         cluster_report.sriov_networks = detect_sriov_networks(&client).await;
     }
 
-    // save scan results to cache (unless --no-cache)
-    if !no_cache {
+    // save scan results to cache (unless cache mode is SkipCache)
+    if cache_mode.should_use_cache() {
         cache_manager.save(&context_key, &cluster_report)?;
     }
 
@@ -435,8 +481,8 @@ async fn run_self_test(config: hermes::self_test::SelfTestConfig) -> Result<()> 
 
     info!("Starting self-test in namespace: {}", config.namespace);
     info!(
-        "Config: dry_run={}, request_gpu={}, workload={:?}, image={}",
-        config.dry_run, config.request_gpu, config.workload, config.image
+        "Config: execution_mode={:?}, gpu_requirement={:?}, workload={:?}, image={}",
+        config.execution_mode, config.gpu_requirement, config.workload, config.image
     );
 
     // check if we should load scan data (for future use in node selection optimization)
@@ -464,12 +510,12 @@ async fn run_self_test(config: hermes::self_test::SelfTestConfig) -> Result<()> 
 
     // note: cached_scan can be used in future for intelligent node selection optimization
 
-    if config.dry_run {
+    if config.execution_mode.is_dry_run() {
         println!("Dry run mode: will render manifests to stdout without deploying");
     }
 
     // setup kubernetes client (unless in dry run mode)
-    let client = if config.dry_run {
+    let client = if config.execution_mode.is_dry_run() {
         // create a dummy client for dry run mode
         kube::Client::try_default().await.unwrap_or_else(|_| {
             // if we can't connect to cluster in dry run, that's ok

@@ -10,6 +10,131 @@ pub enum PlatformType {
     GenericKubernetes,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RdmaCapability {
+    Capable,
+    NotCapable,
+}
+
+impl RdmaCapability {
+    pub fn is_capable(&self) -> bool {
+        matches!(self, Self::Capable)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImageCacheStatus {
+    Cached,
+    NotCached,
+    Unknown,
+}
+
+impl ImageCacheStatus {
+    pub fn is_cached(&self) -> bool {
+        matches!(self, Self::Cached)
+    }
+}
+
+impl From<Option<bool>> for ImageCacheStatus {
+    fn from(value: Option<bool>) -> Self {
+        match value {
+            Some(true) => Self::Cached,
+            Some(false) => Self::NotCached,
+            None => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelDetailLevel {
+    Basic,
+    Detailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeFilter {
+    All,
+    RdmaOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CacheMode {
+    UseCache,
+    SkipCache,
+}
+
+impl CacheMode {
+    pub fn should_use_cache(&self) -> bool {
+        matches!(self, Self::UseCache)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkloadSource {
+    Embedded,
+    Stdin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupMode {
+    Cleanup,
+    NoCleanup,
+}
+
+impl CleanupMode {
+    pub fn should_cleanup(&self) -> bool {
+        matches!(self, Self::Cleanup)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionMode {
+    DryRun,
+    Execute,
+}
+
+impl ExecutionMode {
+    pub fn is_dry_run(&self) -> bool {
+        matches!(self, Self::DryRun)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GpuRequirement {
+    Required,
+    NotRequired,
+}
+
+impl GpuRequirement {
+    pub fn requires_gpu(&self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignalHandling {
+    CleanupOnSignal,
+    NoCleanupOnSignal,
+}
+
+impl SignalHandling {
+    pub fn should_cleanup_on_signal(&self) -> bool {
+        matches!(self, Self::CleanupOnSignal)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImageCacheCheck {
+    CheckCache,
+    SkipCacheCheck,
+}
+
+impl ImageCacheCheck {
+    pub fn should_check_cache(&self) -> bool {
+        matches!(self, Self::CheckCache)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TopologyType {
     LeafGroup, // CoreWeave leafgroup-based
@@ -32,7 +157,7 @@ pub struct TopologyDetection {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeInfo {
     pub name: String,
-    pub rdma_capable: bool,
+    pub rdma_capability: RdmaCapability,
     pub rdma_type: Option<String>,
     pub rdma_resource: Option<String>,
     pub platform_type: PlatformType,
@@ -61,7 +186,7 @@ pub struct NodeInfo {
     pub gke_topology_subblock: Option<String>,
     pub gke_topology_host: Option<String>,
     // image cache tracking
-    pub has_image_cached: Option<bool>,
+    pub image_cache_status: ImageCacheStatus,
     pub image_cache_checked_at: Option<DateTime<Utc>>,
 }
 
