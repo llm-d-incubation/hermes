@@ -751,6 +751,10 @@ impl SelfTestOrchestrator {
         // reuse existing cluster analysis logic from main.rs
         info!("Starting cluster analysis for self-test...");
 
+        // get cluster URL from kube config
+        let kube_config = kube::Config::infer().await?;
+        let api_server_url = kube_config.cluster_url.to_string();
+
         let nodes: Api<Node> = Api::all(self.client.clone());
         let node_list = nodes.list(&ListParams::default()).await?;
         info!("Found {} nodes in cluster", node_list.items.len());
@@ -772,6 +776,7 @@ impl SelfTestOrchestrator {
             total_nodes: node_list.items.len(),
             rdma_nodes: 0,
             platform_type,
+            api_server_url,
             topology_detection: None,
             rdma_types: Vec::new(),
             topology_blocks: HashMap::new(),

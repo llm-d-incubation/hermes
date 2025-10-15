@@ -240,6 +240,7 @@ pub struct ClusterReport {
     pub total_nodes: usize,
     pub rdma_nodes: usize,
     pub platform_type: PlatformType,
+    pub api_server_url: String,
     pub topology_detection: Option<TopologyDetection>,
     pub rdma_types: Vec<String>,
     pub topology_blocks: HashMap<String, usize>,

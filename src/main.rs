@@ -290,6 +290,7 @@ async fn run_scan(
         total_nodes: node_list.items.len(),
         rdma_nodes: 0,
         platform_type,
+        api_server_url: config.cluster_url.to_string(),
         topology_detection: None,
         rdma_types: Vec::new(),
         topology_blocks: HashMap::new(),

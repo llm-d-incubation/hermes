@@ -80,6 +80,11 @@ impl TableFormatter {
             Cell::new(&report.platform_type.to_string()).style_spec("Fc"),
         ]));
 
+        summary_table.add_row(Row::new(vec![
+            Cell::new("API Server"),
+            Cell::new(&report.api_server_url),
+        ]));
+
         if let Some(ref detection) = report.topology_detection {
             summary_table.add_row(Row::new(vec![
                 Cell::new("Topology Type"),
@@ -461,6 +466,7 @@ impl ReportFormatter for MarkdownFormatter {
         // summary section
         output.push_str("## Summary\n\n");
         output.push_str(&format!("**Platform Type:** {}\n\n", report.platform_type));
+        output.push_str(&format!("**API Server:** {}\n\n", report.api_server_url));
 
         if let Some(ref detection) = report.topology_detection {
             output.push_str(&format!(
