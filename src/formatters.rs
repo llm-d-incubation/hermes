@@ -458,9 +458,6 @@ impl ReportFormatter for MarkdownFormatter {
     fn format_report(&self, report: &ClusterReport) -> Result<String> {
         let mut output = String::new();
 
-        // main heading
-        output.push_str("# Cluster Scan Report\n\n");
-
         // summary section
         output.push_str("## Summary\n\n");
         output.push_str(&format!("**Platform Type:** {}\n\n", report.platform_type));
@@ -572,13 +569,24 @@ impl ReportFormatter for MarkdownFormatter {
         // topology distribution table
         if !report.topology_blocks.is_empty() {
             output.push_str("## Topology Distribution\n\n");
-            output.push_str("| Topology Block | Node Count | Percentage |\n");
-            output.push_str("|----------------|------------|------------|\n");
 
+            let headers = vec![
+                "Topology Block".to_string(),
+                "Node Count".to_string(),
+                "Percentage".to_string(),
+            ];
+
+            let mut rows = Vec::new();
             for (block, count) in &report.topology_blocks {
                 let percentage = (*count as f32 / report.total_nodes as f32) * 100.0;
-                output.push_str(&format!("| {} | {} | {:.1}% |\n", block, count, percentage));
+                rows.push(vec![
+                    block.to_string(),
+                    count.to_string(),
+                    format!("{:.1}%", percentage),
+                ]);
             }
+
+            output.push_str(&self.format_table(&headers, &rows));
             output.push('\n');
         }
 
@@ -597,49 +605,65 @@ impl ReportFormatter for MarkdownFormatter {
                 "## GPU Distribution by {}\n\n",
                 topology_type_name
             ));
-            output.push_str(&format!(
-                "| {} | GPU Count | Percentage |\n",
-                topology_type_name
-            ));
-            output.push('|');
-            output.push_str(&"-".repeat(topology_type_name.len() + 2));
-            output.push_str("|-----------|------------|\n");
+
+            let headers = vec![
+                topology_type_name.clone(),
+                "GPU Count".to_string(),
+                "Percentage".to_string(),
+            ];
 
             let all_gpu_entries = self.collect_gpu_entries(report);
+            let mut rows = Vec::new();
             for (block, gpu_count) in &all_gpu_entries {
                 let percentage = if report.total_gpus > 0 {
                     (gpu_count * 100) as f32 / report.total_gpus as f32
                 } else {
                     0.0
                 };
-                output.push_str(&format!(
-                    "| {} | {} | {:.1}% |\n",
-                    block, gpu_count, percentage
-                ));
+                rows.push(vec![
+                    block.to_string(),
+                    gpu_count.to_string(),
+                    format!("{:.1}%", percentage),
+                ]);
             }
 
-            output.push_str(&format!(
-                "| **TOTAL** | **{}** | **100.0%** |\n\n",
-                report.total_gpus
-            ));
+            // add total row
+            rows.push(vec![
+                "**TOTAL**".to_string(),
+                format!("**{}**", report.total_gpus),
+                "**100.0%**".to_string(),
+            ]);
+
+            output.push_str(&self.format_table(&headers, &rows));
+            output.push('\n');
         }
 
         // sr-iov networks table
         if !report.sriov_networks.is_empty() {
             output.push_str("## SR-IOV Networks\n\n");
-            output.push_str("| Name | Target Namespace | Resource Name | VLAN |\n");
-            output.push_str("|------|------------------|---------------|------|\n");
 
+            let headers = vec![
+                "Name".to_string(),
+                "Target Namespace".to_string(),
+                "Resource Name".to_string(),
+                "VLAN".to_string(),
+            ];
+
+            let mut rows = Vec::new();
             for network in &report.sriov_networks {
                 let vlan_str = network
                     .vlan
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                output.push_str(&format!(
-                    "| {} | {} | {} | {} |\n",
-                    network.name, network.namespace, network.resource_name, vlan_str
-                ));
+                rows.push(vec![
+                    network.name.clone(),
+                    network.namespace.clone(),
+                    network.resource_name.clone(),
+                    vlan_str,
+                ]);
             }
+
+            output.push_str(&self.format_table(&headers, &rows));
             output.push('\n');
         }
 
@@ -655,31 +679,22 @@ impl ReportFormatter for MarkdownFormatter {
 
             // build table header dynamically based on platform
             let mut headers = vec![
-                "Node Name",
-                "RDMA",
-                "RDMA Type",
-                "Platform",
-                &topology_header,
+                "Node Name".to_string(),
+                "RDMA".to_string(),
+                "RDMA Type".to_string(),
+                "Platform".to_string(),
+                topology_header.clone(),
             ];
 
             if report.platform_type == PlatformType::CoreWeave {
-                headers.extend(&["IB Speed", "Fabric"]);
+                headers.extend(vec!["IB Speed".to_string(), "Fabric".to_string()]);
             } else if report.platform_type == PlatformType::GKE {
-                headers.push("Node Pool");
+                headers.push("Node Pool".to_string());
             }
 
-            headers.extend(&["GPU Count", "GPU Type"]);
+            headers.extend(vec!["GPU Count".to_string(), "GPU Type".to_string()]);
 
-            output.push_str("| ");
-            output.push_str(&headers.join(" | "));
-            output.push_str(" |\n");
-
-            output.push('|');
-            for _ in &headers {
-                output.push_str("--------|");
-            }
-            output.push('\n');
-
+            let mut rows = Vec::new();
             for node in &report.nodes {
                 let rdma_status = if node.rdma_capability.is_capable() {
                     "Yes"
@@ -713,10 +728,10 @@ impl ReportFormatter for MarkdownFormatter {
                 );
                 row.push(node.gpu_type.as_deref().unwrap_or("-").to_string());
 
-                output.push_str("| ");
-                output.push_str(&row.join(" | "));
-                output.push_str(" |\n");
+                rows.push(row);
             }
+
+            output.push_str(&self.format_table(&headers, &rows));
         }
 
         Ok(output)
@@ -724,6 +739,65 @@ impl ReportFormatter for MarkdownFormatter {
 }
 
 impl MarkdownFormatter {
+    // helper function to format markdown tables with proper alignment
+    fn format_table(&self, headers: &[String], rows: &[Vec<String>]) -> String {
+        if headers.is_empty() {
+            return String::new();
+        }
+
+        // calculate maximum width for each column
+        let num_cols = headers.len();
+        let mut col_widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+
+        for row in rows {
+            for (i, cell) in row.iter().enumerate().take(num_cols) {
+                // strip markdown bold markers for width calculation
+                let cell_content = cell.replace("**", "");
+                col_widths[i] = col_widths[i].max(cell_content.len());
+            }
+        }
+
+        let mut output = String::new();
+
+        // format header row
+        output.push('|');
+        for (i, header) in headers.iter().enumerate() {
+            output.push(' ');
+            output.push_str(&format!("{:<width$}", header, width = col_widths[i]));
+            output.push_str(" |");
+        }
+        output.push('\n');
+
+        // format separator row
+        output.push('|');
+        for &width in &col_widths {
+            output.push(' ');
+            output.push_str(&"-".repeat(width));
+            output.push_str(" |");
+        }
+        output.push('\n');
+
+        // format data rows
+        for row in rows {
+            output.push('|');
+            for (i, cell) in row.iter().enumerate().take(num_cols) {
+                output.push(' ');
+                // handle bold text - pad outside the bold markers
+                if cell.starts_with("**") && cell.ends_with("**") {
+                    let content = &cell[2..cell.len() - 2];
+                    let padding = col_widths[i].saturating_sub(content.len());
+                    output.push_str(&format!("**{}**{}", content, " ".repeat(padding)));
+                } else {
+                    output.push_str(&format!("{:<width$}", cell, width = col_widths[i]));
+                }
+                output.push_str(" |");
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+
     fn collect_gpu_entries(&self, report: &ClusterReport) -> Vec<(String, u32)> {
         let mut all_gpu_entries: Vec<(String, u32)> = Vec::new();
 
