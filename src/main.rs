@@ -23,7 +23,7 @@ struct Args {
 enum Commands {
     /// Scan cluster for topology and RDMA capabilities (default command)
     Scan {
-        /// Output format (json, yaml, table)
+        /// Output format (json, yaml, markdown, table)
         #[arg(short, long, default_value = "table")]
         format: String,
 

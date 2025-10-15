@@ -9,6 +9,7 @@ pub trait ReportFormatter {
 pub struct JsonFormatter;
 pub struct YamlFormatter;
 pub struct TableFormatter;
+pub struct MarkdownFormatter;
 
 impl ReportFormatter for JsonFormatter {
     fn format_report(&self, report: &ClusterReport) -> Result<String> {
@@ -453,10 +454,313 @@ impl TableFormatter {
     }
 }
 
+impl ReportFormatter for MarkdownFormatter {
+    fn format_report(&self, report: &ClusterReport) -> Result<String> {
+        let mut output = String::new();
+
+        // main heading
+        output.push_str("# Cluster Scan Report\n\n");
+
+        // summary section
+        output.push_str("## Summary\n\n");
+        output.push_str(&format!("**Platform Type:** {}\n\n", report.platform_type));
+
+        if let Some(ref detection) = report.topology_detection {
+            output.push_str(&format!(
+                "**Topology Type:** {}\n\n",
+                detection.topology_type
+            ));
+            output.push_str(&format!(
+                "**Detection Method:** {}\n\n",
+                detection.detection_method
+            ));
+            output.push_str(&format!(
+                "**Detection Confidence:** {}\n\n",
+                detection.confidence
+            ));
+        }
+
+        output.push_str(&format!("**Total Nodes:** {}\n\n", report.total_nodes));
+        output.push_str(&format!(
+            "**RDMA-Capable Nodes:** {} ({:.1}%)\n\n",
+            report.rdma_nodes,
+            (report.rdma_nodes as f32 / report.total_nodes as f32) * 100.0
+        ));
+
+        if !report.rdma_types.is_empty() {
+            let rdma_types_clean: Vec<&String> =
+                report.rdma_types.iter().filter(|s| !s.is_empty()).collect();
+            if !rdma_types_clean.is_empty() {
+                output.push_str(&format!(
+                    "**RDMA Types:** {}\n\n",
+                    rdma_types_clean
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        output.push_str(&format!(
+            "**GPU Nodes:** {} ({:.1}%)\n\n",
+            report.gpu_nodes,
+            (report.gpu_nodes as f32 / report.total_nodes as f32) * 100.0
+        ));
+        output.push_str(&format!("**Total GPUs:** {}\n\n", report.total_gpus));
+
+        if !report.gpu_types.is_empty() {
+            let gpu_types_clean: Vec<&String> =
+                report.gpu_types.iter().filter(|s| !s.is_empty()).collect();
+            if !gpu_types_clean.is_empty() {
+                output.push_str(&format!(
+                    "**GPU Types:** {}\n\n",
+                    gpu_types_clean
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        if !report.ib_fabrics.is_empty() {
+            let ib_fabrics_clean: Vec<&String> =
+                report.ib_fabrics.iter().filter(|s| !s.is_empty()).collect();
+            if !ib_fabrics_clean.is_empty() {
+                output.push_str(&format!(
+                    "**InfiniBand Fabrics:** {}\n\n",
+                    ib_fabrics_clean
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        if !report.superpods.is_empty() {
+            let superpods_clean: Vec<&String> =
+                report.superpods.iter().filter(|s| !s.is_empty()).collect();
+            if !superpods_clean.is_empty() {
+                output.push_str(&format!(
+                    "**Superpods:** {}\n\n",
+                    superpods_clean
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        if !report.leafgroups.is_empty() {
+            let leafgroups_clean: Vec<&String> =
+                report.leafgroups.iter().filter(|s| !s.is_empty()).collect();
+            if !leafgroups_clean.is_empty() {
+                output.push_str(&format!(
+                    "**Leaf Groups:** {}\n\n",
+                    leafgroups_clean
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        // topology distribution table
+        if !report.topology_blocks.is_empty() {
+            output.push_str("## Topology Distribution\n\n");
+            output.push_str("| Topology Block | Node Count | Percentage |\n");
+            output.push_str("|----------------|------------|------------|\n");
+
+            for (block, count) in &report.topology_blocks {
+                let percentage = (*count as f32 / report.total_nodes as f32) * 100.0;
+                output.push_str(&format!("| {} | {} | {:.1}% |\n", block, count, percentage));
+            }
+            output.push('\n');
+        }
+
+        // gpu distribution table
+        if !report.topology_gpu_counts.is_empty() {
+            let topology_type_name = if let Some(ref detection) = report.topology_detection {
+                match detection.topology_type {
+                    TopologyType::LeafGroup => "Fabric".to_string(),
+                    _ => detection.topology_type.to_string(),
+                }
+            } else {
+                "Topology Group".to_string()
+            };
+
+            output.push_str(&format!(
+                "## GPU Distribution by {}\n\n",
+                topology_type_name
+            ));
+            output.push_str(&format!(
+                "| {} | GPU Count | Percentage |\n",
+                topology_type_name
+            ));
+            output.push('|');
+            output.push_str(&"-".repeat(topology_type_name.len() + 2));
+            output.push_str("|-----------|------------|\n");
+
+            let all_gpu_entries = self.collect_gpu_entries(report);
+            for (block, gpu_count) in &all_gpu_entries {
+                let percentage = if report.total_gpus > 0 {
+                    (gpu_count * 100) as f32 / report.total_gpus as f32
+                } else {
+                    0.0
+                };
+                output.push_str(&format!(
+                    "| {} | {} | {:.1}% |\n",
+                    block, gpu_count, percentage
+                ));
+            }
+
+            output.push_str(&format!(
+                "| **TOTAL** | **{}** | **100.0%** |\n\n",
+                report.total_gpus
+            ));
+        }
+
+        // sr-iov networks table
+        if !report.sriov_networks.is_empty() {
+            output.push_str("## SR-IOV Networks\n\n");
+            output.push_str("| Name | Target Namespace | Resource Name | VLAN |\n");
+            output.push_str("|------|------------------|---------------|------|\n");
+
+            for network in &report.sriov_networks {
+                let vlan_str = network
+                    .vlan
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                output.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    network.name, network.namespace, network.resource_name, vlan_str
+                ));
+            }
+            output.push('\n');
+        }
+
+        // node details table
+        if !report.nodes.is_empty() {
+            output.push_str("## Node Details\n\n");
+
+            let topology_header = if let Some(ref detection) = report.topology_detection {
+                format!("Topology ({})", detection.topology_type)
+            } else {
+                "Topology".to_string()
+            };
+
+            // build table header dynamically based on platform
+            let mut headers = vec![
+                "Node Name",
+                "RDMA",
+                "RDMA Type",
+                "Platform",
+                &topology_header,
+            ];
+
+            if report.platform_type == PlatformType::CoreWeave {
+                headers.extend(&["IB Speed", "Fabric"]);
+            } else if report.platform_type == PlatformType::GKE {
+                headers.push("Node Pool");
+            }
+
+            headers.extend(&["GPU Count", "GPU Type"]);
+
+            output.push_str("| ");
+            output.push_str(&headers.join(" | "));
+            output.push_str(" |\n");
+
+            output.push('|');
+            for _ in &headers {
+                output.push_str("--------|");
+            }
+            output.push('\n');
+
+            for node in &report.nodes {
+                let rdma_status = if node.rdma_capability.is_capable() {
+                    "Yes"
+                } else {
+                    "No"
+                };
+
+                let mut row = vec![
+                    node.name.clone(),
+                    rdma_status.to_string(),
+                    node.rdma_type.as_deref().unwrap_or("-").to_string(),
+                    node.platform_type.to_string(),
+                    node.topology_block.as_deref().unwrap_or("-").to_string(),
+                ];
+
+                if report.platform_type == PlatformType::CoreWeave {
+                    row.push(node.ib_speed.as_deref().unwrap_or("-").to_string());
+                    row.push(node.ib_fabric.as_deref().unwrap_or("-").to_string());
+                } else if report.platform_type == PlatformType::GKE {
+                    let nodepool = match &node.platform_data {
+                        PlatformSpecificData::Gke(data) => data.nodepool.as_deref().unwrap_or("-"),
+                        _ => "-",
+                    };
+                    row.push(nodepool.to_string());
+                }
+
+                row.push(
+                    node.gpu_count
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                );
+                row.push(node.gpu_type.as_deref().unwrap_or("-").to_string());
+
+                output.push_str("| ");
+                output.push_str(&row.join(" | "));
+                output.push_str(" |\n");
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+impl MarkdownFormatter {
+    fn collect_gpu_entries(&self, report: &ClusterReport) -> Vec<(String, u32)> {
+        let mut all_gpu_entries: Vec<(String, u32)> = Vec::new();
+
+        if report.platform_type == PlatformType::CoreWeave {
+            let mut all_fabrics = std::collections::HashSet::new();
+            for fabric in report.topology_gpu_counts.keys() {
+                all_fabrics.insert(fabric.clone());
+            }
+            for fabric in &report.ib_fabrics {
+                all_fabrics.insert(fabric.clone());
+            }
+
+            for fabric in all_fabrics {
+                let gpu_count = report
+                    .topology_gpu_counts
+                    .get(&fabric)
+                    .copied()
+                    .unwrap_or(0);
+                all_gpu_entries.push((fabric, gpu_count));
+            }
+        } else {
+            for block in report.topology_blocks.keys() {
+                let gpu_count = report.topology_gpu_counts.get(block).copied().unwrap_or(0);
+                all_gpu_entries.push((block.clone(), gpu_count));
+            }
+        }
+
+        all_gpu_entries.sort_by(|a, b| b.1.cmp(&a.1));
+        all_gpu_entries
+    }
+}
+
 pub fn get_formatter(format: &str) -> Box<dyn ReportFormatter> {
     match format {
         "json" => Box::new(JsonFormatter),
         "yaml" => Box::new(YamlFormatter),
+        "markdown" | "md" => Box::new(MarkdownFormatter),
         _ => Box::new(TableFormatter),
     }
 }
