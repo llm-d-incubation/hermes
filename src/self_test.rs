@@ -634,12 +634,14 @@ impl SelfTestOrchestrator {
                 .or_else(|| detected.clone())
                 .unwrap_or_else(|| "roce-p2".to_string());
 
-            // open up UCX transport list to include GDRCOPY and CUDA IPC if GPU requested
+            // for RoCE with SR-IOV, use conservative transport list (rc and tcp only)
+            // ud/dc can cause issues with some SR-IOV configurations
             let tls = if self.config.gpu_requirement.requires_gpu() {
-                "rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy".to_string()
+                "rc,tcp,cuda_copy,cuda_ipc".to_string()
             } else {
-                "rc,ud,dc,tcp".to_string()
+                "rc,tcp".to_string()
             };
+            // use GID index 3 which works for most SR-IOV RoCE setups
             (tls, "3".to_string(), Some(network))
         } else {
             // for InfiniBand, let UCX auto-select or specify full list
