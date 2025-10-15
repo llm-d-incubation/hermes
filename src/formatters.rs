@@ -413,6 +413,20 @@ impl TableFormatter {
             Cell::new("GPU Type").style_spec("Fb"),
         ]);
 
+        // add usage columns if data is available
+        let has_usage_data = report
+            .nodes
+            .iter()
+            .any(|n| n.cpu_allocated.is_some() || n.memory_allocated.is_some());
+
+        if has_usage_data {
+            title_cells.extend(vec![
+                Cell::new("GPU Usage").style_spec("Fb"),
+                Cell::new("CPU Usage").style_spec("Fb"),
+                Cell::new("Memory Usage").style_spec("Fb"),
+            ]);
+        }
+
         title_cells
     }
 
@@ -455,7 +469,75 @@ impl TableFormatter {
             Cell::new(node.gpu_type.as_deref().unwrap_or("-")),
         ]);
 
+        // add usage columns if data is available
+        let has_usage_data = report
+            .nodes
+            .iter()
+            .any(|n| n.cpu_allocated.is_some() || n.memory_allocated.is_some());
+
+        if has_usage_data {
+            // format gpu usage as "allocated/allocatable"
+            let gpu_usage = if let (Some(allocated), Some(allocatable)) =
+                (node.gpu_allocated, node.gpu_allocatable)
+            {
+                format!("{}/{}", allocated, allocatable)
+            } else {
+                "-".to_string()
+            };
+
+            // format cpu usage as "allocated/allocatable"
+            let cpu_usage = if let (Some(allocated), Some(allocatable)) =
+                (&node.cpu_allocated, &node.cpu_allocatable)
+            {
+                format!("{}/{}", allocated, allocatable)
+            } else {
+                "-".to_string()
+            };
+
+            // format memory usage as "allocated/allocatable" in unified units (Gi)
+            let memory_usage = if let (Some(allocated), Some(allocatable)) =
+                (&node.memory_allocated, &node.memory_allocatable)
+            {
+                let alloc_gi = Self::convert_to_gi(allocated);
+                let total_gi = Self::convert_to_gi(allocatable);
+                format!("{:.1}Gi/{:.1}Gi", alloc_gi, total_gi)
+            } else {
+                "-".to_string()
+            };
+
+            row_cells.extend(vec![
+                Cell::new(&gpu_usage),
+                Cell::new(&cpu_usage),
+                Cell::new(&memory_usage),
+            ]);
+        }
+
         row_cells
+    }
+
+    /// helper to convert kubernetes memory quantities to Gi for display
+    fn convert_to_gi(quantity: &str) -> f64 {
+        if quantity.ends_with("Gi") {
+            quantity
+                .trim_end_matches("Gi")
+                .parse::<f64>()
+                .unwrap_or(0.0)
+        } else if quantity.ends_with("Mi") {
+            let mi = quantity
+                .trim_end_matches("Mi")
+                .parse::<f64>()
+                .unwrap_or(0.0);
+            mi / 1024.0
+        } else if quantity.ends_with("Ki") {
+            let ki = quantity
+                .trim_end_matches("Ki")
+                .parse::<f64>()
+                .unwrap_or(0.0);
+            ki / (1024.0 * 1024.0)
+        } else {
+            // assume bytes
+            quantity.parse::<f64>().unwrap_or(0.0) / (1024.0 * 1024.0 * 1024.0)
+        }
     }
 }
 

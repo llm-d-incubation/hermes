@@ -164,6 +164,15 @@ impl ClusterAnalyzer {
             _ => PlatformSpecificData::Generic,
         };
 
+        // extract CPU and memory allocatable resources
+        let (cpu_allocatable, memory_allocatable) = if let Some(alloc) = allocatable {
+            let cpu = alloc.get("cpu").map(|q| q.0.clone());
+            let mem = alloc.get("memory").map(|q| q.0.clone());
+            (cpu, mem)
+        } else {
+            (None, None)
+        };
+
         Ok(NodeInfo {
             name,
             rdma_capability,
@@ -184,6 +193,10 @@ impl ClusterAnalyzer {
             gpu_type,
             gpu_allocatable,
             gpu_allocated: None, // will be populated later if needed
+            cpu_allocatable,
+            cpu_allocated: None, // will be populated later if needed
+            memory_allocatable,
+            memory_allocated: None, // will be populated later if needed
             platform_data,
             image_cache_status,
             image_cache_checked_at: if check_image.is_some() {
@@ -405,6 +418,134 @@ impl ClusterAnalyzer {
         // update node info with allocated counts
         for node in nodes.iter_mut() {
             node.gpu_allocated = allocated_per_node.get(&node.name).copied();
+        }
+    }
+
+    /// Populate CPU and memory allocated resources for each node by querying running pods
+    pub fn populate_resource_allocations(
+        nodes: &mut [NodeInfo],
+        pods: &[k8s_openapi::api::core::v1::Pod],
+    ) {
+        use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+        use std::collections::HashMap;
+
+        // calculate allocated resources per node
+        let mut cpu_allocated_per_node: HashMap<String, Quantity> = HashMap::new();
+        let mut memory_allocated_per_node: HashMap<String, Quantity> = HashMap::new();
+
+        for pod in pods {
+            // skip pods that are not running or scheduled
+            let phase = pod.status.as_ref().and_then(|s| s.phase.as_ref());
+            if phase != Some(&"Running".to_string()) && phase != Some(&"Pending".to_string()) {
+                continue;
+            }
+
+            // get node name
+            let node_name = match pod.spec.as_ref().and_then(|s| s.node_name.as_ref()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // sum resource requests from all containers
+            if let Some(spec) = &pod.spec {
+                for container in &spec.containers {
+                    if let Some(resources) = &container.resources
+                        && let Some(requests) = &resources.requests
+                    {
+                        // accumulate CPU
+                        if let Some(cpu) = requests.get("cpu") {
+                            cpu_allocated_per_node
+                                .entry(node_name.clone())
+                                .and_modify(|total| {
+                                    *total = Self::add_quantities(total, cpu);
+                                })
+                                .or_insert_with(|| cpu.clone());
+                        }
+
+                        // accumulate memory
+                        if let Some(mem) = requests.get("memory") {
+                            memory_allocated_per_node
+                                .entry(node_name.clone())
+                                .and_modify(|total| {
+                                    *total = Self::add_quantities(total, mem);
+                                })
+                                .or_insert_with(|| mem.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // update node info with allocated counts
+        for node in nodes.iter_mut() {
+            node.cpu_allocated = cpu_allocated_per_node.get(&node.name).map(|q| q.0.clone());
+            node.memory_allocated = memory_allocated_per_node
+                .get(&node.name)
+                .map(|q| q.0.clone());
+        }
+    }
+
+    /// helper to add two kubernetes quantities (simplified - just sums the raw strings)
+    fn add_quantities(
+        q1: &k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+        q2: &k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+    ) -> k8s_openapi::apimachinery::pkg::api::resource::Quantity {
+        // for simplicity, we'll parse millicores for CPU and bytes for memory
+        // this is a simplified implementation - a real one would handle all unit types
+
+        // try to parse as millicores (for CPU) or raw number using i128 to avoid overflow
+        let parse_value = |s: &str| -> Result<i128, ()> {
+            if s.ends_with('m') {
+                // millicores
+                s.trim_end_matches('m').parse().map_err(|_| ())
+            } else if let Ok(val) = s.parse::<f64>() {
+                // cores to millicores
+                Ok((val * 1000.0) as i128)
+            } else if s.ends_with("Ki") {
+                // kibibytes
+                let v: i128 = s.trim_end_matches("Ki").parse().map_err(|_| ())?;
+                v.checked_mul(1024).ok_or(())
+            } else if s.ends_with("Mi") {
+                // mebibytes
+                let v: i128 = s.trim_end_matches("Mi").parse().map_err(|_| ())?;
+                v.checked_mul(1024 * 1024).ok_or(())
+            } else if s.ends_with("Gi") {
+                // gibibytes
+                let v: i128 = s.trim_end_matches("Gi").parse().map_err(|_| ())?;
+                v.checked_mul(1024 * 1024 * 1024).ok_or(())
+            } else {
+                s.parse().map_err(|_| ())
+            }
+        };
+
+        if let (Ok(v1), Ok(v2)) = (parse_value(&q1.0), parse_value(&q2.0)) {
+            if let Some(sum) = v1.checked_add(v2) {
+                // determine unit based on first quantity and convert back
+                if q1.0.ends_with('m') || q2.0.ends_with('m') {
+                    k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!("{}m", sum))
+                } else if q1.0.ends_with("Gi") || q2.0.ends_with("Gi") {
+                    // sum is in bytes, convert back to Gi
+                    let gi = sum / (1024 * 1024 * 1024);
+                    k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!("{}Gi", gi))
+                } else if q1.0.ends_with("Mi") || q2.0.ends_with("Mi") {
+                    // sum is in bytes, convert back to Mi
+                    let mi = sum / (1024 * 1024);
+                    k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!("{}Mi", mi))
+                } else if q1.0.ends_with("Ki") || q2.0.ends_with("Ki") {
+                    // sum is in bytes, convert back to Ki
+                    let ki = sum / 1024;
+                    k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!("{}Ki", ki))
+                } else {
+                    // for CPU cores (no suffix), sum is in millicores, just return the value
+                    k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!("{}", sum))
+                }
+            } else {
+                // overflow occurred, just return first quantity
+                q1.clone()
+            }
+        } else {
+            // fallback to keeping first quantity if parsing fails
+            q1.clone()
         }
     }
 }

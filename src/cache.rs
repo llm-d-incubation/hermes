@@ -119,8 +119,19 @@ impl CacheManager {
         let cache_data =
             std::fs::read_to_string(&cache_file).context("Failed to read cache file")?;
 
-        let cached_scan: CachedScan =
-            serde_json::from_str(&cache_data).context("Failed to parse cache file")?;
+        // try to parse cache file, but handle format incompatibilities gracefully
+        let cached_scan: CachedScan = match serde_json::from_str(&cache_data) {
+            Ok(scan) => scan,
+            Err(e) => {
+                info!(
+                    "Cache file incompatible with current format ({}), will perform fresh scan",
+                    e
+                );
+                // clean up incompatible cache file
+                let _ = std::fs::remove_file(&cache_file);
+                return Ok(None);
+            }
+        };
 
         if !cached_scan.is_valid(context_key, ttl_hours) {
             info!("Cache invalid or expired, will perform fresh scan");

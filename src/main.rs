@@ -35,6 +35,10 @@ enum Commands {
         #[arg(long)]
         detailed_labels: bool,
 
+        /// Show resource usage (CPU/memory/GPU) by querying running pods
+        #[arg(long)]
+        show_usage: bool,
+
         /// Save scan results to file for use by self-test
         #[arg(long)]
         save_to: Option<String>,
@@ -110,6 +114,7 @@ async fn main() -> Result<()> {
             format,
             rdma_only,
             detailed_labels,
+            show_usage,
             save_to,
             no_cache,
             cache_ttl,
@@ -134,6 +139,7 @@ async fn main() -> Result<()> {
                 format,
                 node_filter,
                 detail_level,
+                show_usage,
                 save_to,
                 cache_mode,
                 cache_ttl,
@@ -203,6 +209,7 @@ async fn run_scan(
     format: String,
     node_filter: NodeFilter,
     detail_level: LabelDetailLevel,
+    show_usage: bool,
     save_to: Option<String>,
     cache_mode: CacheMode,
     cache_ttl: Option<i64>,
@@ -401,6 +408,17 @@ async fn run_scan(
     ) {
         info!("Detecting SR-IOV networks across all namespaces...");
         cluster_report.sriov_networks = detect_sriov_networks(&client).await;
+    }
+
+    // populate resource allocations if requested
+    if show_usage {
+        info!("Querying pod allocations for resource usage...");
+        use k8s_openapi::api::core::v1::Pod;
+        let pods: Api<Pod> = Api::all(client.clone());
+        let pod_list = pods.list(&ListParams::default()).await?;
+
+        ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
+        ClusterAnalyzer::populate_resource_allocations(&mut cluster_report.nodes, &pod_list.items);
     }
 
     // save scan results to cache (unless cache mode is SkipCache)

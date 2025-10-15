@@ -204,6 +204,11 @@ pub struct NodeInfo {
     pub gpu_type: Option<String>,
     pub gpu_allocatable: Option<u32>,
     pub gpu_allocated: Option<u32>,
+    // resource usage tracking
+    pub cpu_allocatable: Option<String>,
+    pub cpu_allocated: Option<String>,
+    pub memory_allocatable: Option<String>,
+    pub memory_allocated: Option<String>,
     // platform-specific data
     pub platform_data: PlatformSpecificData,
     // image cache tracking
