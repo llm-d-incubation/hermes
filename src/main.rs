@@ -111,6 +111,11 @@ enum Commands {
         /// Example: 'string(int(extract(node_name, "r(\\d+)")) / 10)'
         #[arg(long)]
         topology_rule: Option<String>,
+
+        /// UCX GID index for RoCE (default: auto-detect via UCX)
+        /// Override only if you need a specific GID index (e.g., "3")
+        #[arg(long)]
+        ucx_gid_index: Option<String>,
     },
 }
 
@@ -185,6 +190,7 @@ async fn main() -> Result<()> {
             image,
             gpus_per_node,
             topology_rule,
+            ucx_gid_index,
         } => {
             use hermes::self_test::SelfTestConfig;
             use std::time::Duration;
@@ -226,6 +232,7 @@ async fn main() -> Result<()> {
                 cache_ttl_seconds: 1800, // 30 minutes
                 cache_check_timeout: Duration::from_secs(5),
                 topology_rule,
+                ucx_gid_index,
             };
 
             run_self_test(config).await

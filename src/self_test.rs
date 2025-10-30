@@ -42,6 +42,7 @@ pub struct SelfTestConfig {
     #[serde(skip)]
     pub cache_check_timeout: Duration,
     pub topology_rule: Option<String>,
+    pub ucx_gid_index: Option<String>,
 }
 
 impl Object for SelfTestConfig {
@@ -642,8 +643,9 @@ impl SelfTestOrchestrator {
             } else {
                 "rc,tcp".to_string()
             };
-            // use GID index 3 which works for most SR-IOV RoCE setups
-            (tls, "3".to_string(), Some(network))
+            // use CLI-specified GID index, or let UCX auto-detect
+            let gid_index = self.config.ucx_gid_index.clone().unwrap_or_default();
+            (tls, gid_index, Some(network))
         } else {
             // for InfiniBand, let UCX auto-select or specify full list
             tracing::info!("Detected InfiniBand, configuring UCX transports");
@@ -1535,6 +1537,7 @@ impl Default for SelfTestConfig {
             cache_ttl_seconds: 1800, // 30 minutes
             cache_check_timeout: Duration::from_secs(5),
             topology_rule: None,
+            ucx_gid_index: None,
         }
     }
 }
