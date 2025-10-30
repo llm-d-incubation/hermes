@@ -6,5 +6,6 @@ pub mod formatters;
 pub mod models;
 pub mod platforms;
 pub mod self_test;
+pub mod topology_rule;
 pub mod topology_selector;
 pub mod workloads;

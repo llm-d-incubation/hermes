@@ -15,8 +15,15 @@ impl ClusterAnalyzer {
         node: &Node,
         detail_level: LabelDetailLevel,
         cluster_topology_strategy: &Option<TopologyDetection>,
+        topology_rule: Option<&str>,
     ) -> Result<NodeInfo> {
-        Self::analyze_node_with_image(node, detail_level, cluster_topology_strategy, None)
+        Self::analyze_node_with_image(
+            node,
+            detail_level,
+            cluster_topology_strategy,
+            None,
+            topology_rule,
+        )
     }
 
     /// Analyze a single node with optional image cache detection
@@ -25,6 +32,7 @@ impl ClusterAnalyzer {
         detail_level: LabelDetailLevel,
         cluster_topology_strategy: &Option<TopologyDetection>,
         check_image: Option<&str>,
+        topology_rule: Option<&str>,
     ) -> Result<NodeInfo> {
         let name = node.metadata.name.clone().unwrap_or_default();
         let labels = node.metadata.labels.clone().unwrap_or_default();
@@ -71,8 +79,22 @@ impl ClusterAnalyzer {
             (None, None, None)
         };
 
-        // detect topology block using cluster-wide strategy or platform-specific detection
-        let (topology_block, topology_detection) = if cluster_topology_strategy.is_some() {
+        // detect topology block using custom rule, cluster-wide strategy, or platform-specific detection
+        let (topology_block, topology_detection) = if let Some(rule) = topology_rule {
+            // custom rule supersedes all other detection methods
+            use crate::topology_rule::{create_custom_topology_detection, evaluate_topology_rule};
+            match evaluate_topology_rule(node, &labels, rule) {
+                Ok(Some(result)) => (Some(result), Some(create_custom_topology_detection(rule))),
+                Ok(None) => (None, Some(create_custom_topology_detection(rule))),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to evaluate topology rule for node {}: {}",
+                        name, e
+                    );
+                    (None, None)
+                }
+            }
+        } else if cluster_topology_strategy.is_some() {
             Self::detect_topology_block_with_strategy(
                 node,
                 &platform_type,
@@ -559,7 +581,8 @@ mod tests {
     fn test_analyze_node_gke_with_rdma() {
         // create a mock GKE node with RDMA capabilities
         let node = create_mock_gke_node();
-        let result = ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None).unwrap();
+        let result =
+            ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None, None).unwrap();
 
         assert_yaml_snapshot!(result, {
             ".node_labels" => insta::sorted_redaction(),

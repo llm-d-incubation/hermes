@@ -154,6 +154,7 @@ pub enum TopologyType {
     Subnet,    // Network subnet-based
     Hardware,  // Hardware/machine type-based
     GkeBlock,  // GKE topology block (rail-aligned for RDMA)
+    Custom,    // Custom CEL rule-based
     Unknown,   // No topology detected
 }
 
@@ -284,6 +285,7 @@ impl std::fmt::Display for TopologyType {
             TopologyType::Subnet => write!(f, "Subnet"),
             TopologyType::Hardware => write!(f, "Hardware"),
             TopologyType::GkeBlock => write!(f, "GKE Block"),
+            TopologyType::Custom => write!(f, "Custom"),
             TopologyType::Unknown => write!(f, "Unknown"),
         }
     }

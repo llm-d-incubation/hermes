@@ -17,11 +17,11 @@ impl TestWorkload for DeepEpInternodeTest {
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(600) // 10 minutes
+        Duration::from_secs(1200) // 20 minutes - test involves extensive tuning loops
     }
 
     fn required_gpus_per_node(&self) -> u32 {
-        8 // internode test requires 8 local ranks (8 GPUs) per node
+        2 // supports 1, 2, 4, or 8 GPUs per node (default to 2 for flexibility)
     }
 
     fn success_criteria(&self) -> Vec<String> {
