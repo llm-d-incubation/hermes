@@ -27,6 +27,7 @@ echo "Running DeepEP internode test with $GPU_COUNT processes per node, 2 nodes 
 export MASTER_ADDR=deepep-internode-master-${TEST_ID}
 export MASTER_PORT=29500
 export WORLD_SIZE=2
+export RANK=1
 export PYTHONUNBUFFERED=1
 
 echo "Starting Python test script..."

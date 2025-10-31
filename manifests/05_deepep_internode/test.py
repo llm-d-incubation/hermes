@@ -338,10 +338,14 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_sms = 24
     num_qps_per_rank = max(num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0)
 
+    # enable low latency mode for configurations with < 8 local ranks (fewer than NUM_MAX_NVL_PEERS)
+    # this is required by DeepEP's assertion: num_ranks > NUM_MAX_NVL_PEERS or low_latency_mode
+    needs_low_latency = num_local_ranks < 8 or args.test_ll_compatibility
+
     buffer = deep_ep.Buffer(group,
                             int(2e9),
                             int(1e9),
-                            low_latency_mode=args.test_ll_compatibility,
+                            low_latency_mode=needs_low_latency,
                             num_qps_per_rank=num_qps_per_rank,
                             explicitly_destroy=True)
 

@@ -439,7 +439,7 @@ impl ClusterAnalyzer {
 
         // update node info with allocated counts
         for node in nodes.iter_mut() {
-            node.gpu_allocated = allocated_per_node.get(&node.name).copied();
+            node.gpu_allocated = Some(allocated_per_node.get(&node.name).copied().unwrap_or(0));
         }
     }
 
