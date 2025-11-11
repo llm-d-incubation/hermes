@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn test_coreweave_selector_same_leafgroup() {
         let selector = CoreWeaveTopologySelector;
-        let nodes = vec![
+        let nodes = [
             create_mock_node("node1", Some("lg1"), Some("lg1")),
             create_mock_node("node2", Some("lg1"), Some("lg1")),
             create_mock_node("node3", Some("lg2"), Some("lg2")),
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn test_gke_selector_different_topologies() {
         let selector = GkeTopologySelector;
-        let nodes = vec![
+        let nodes = [
             create_mock_node("node1", None, Some("zone-a")),
             create_mock_node("node2", None, Some("zone-b")),
         ];
