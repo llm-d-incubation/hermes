@@ -8,10 +8,24 @@ nvidia-smi -L
 GPU_COUNT=$(nvidia-smi -L | wc -l)
 echo "Detected $GPU_COUNT GPUs"
 
+# source and run diagnostics
+source /opt/deepep-test/diagnostics.sh
+print_rdma_diagnostics
+
+# detect and configure nvshmem to use the correct RDMA device
+RDMA_DEVICE=$(get_net1_rdma_device)
+if [ -n "$RDMA_DEVICE" ]; then
+  export NVSHMEM_HCA_LIST="$RDMA_DEVICE"
+  echo "Configured NVSHMEM to use RDMA device: $RDMA_DEVICE"
+else
+  echo "WARNING: Could not detect RDMA device for net1, nvshmem may fail"
+fi
+
 echo "Cloning DeepEP repository..."
 cd /tmp
 git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
 cd DeepEP
+git checkout v1.2.1
 
 TOTAL_GPUS=$((GPU_COUNT * 2))
 echo "Running DeepEP low latency test with $TOTAL_GPUS total GPUs (rank 0-$((GPU_COUNT-1)))"
@@ -23,9 +37,9 @@ export RANK=0
 export PYTHONUNBUFFERED=1
 
 echo "Starting Python test script..."
-echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32"
+echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 2048 --num-topk 4 --num-experts 32"
 
-python -u tests/test_low_latency.py --num-processes "$GPU_COUNT" --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
+python -u tests/test_low_latency.py --num-processes "$GPU_COUNT" --num-tokens 128 --hidden 2048 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
 
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 echo "Python test exited with code: $TEST_EXIT_CODE"
