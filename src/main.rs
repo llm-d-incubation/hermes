@@ -50,6 +50,13 @@ enum Commands {
         /// Cache TTL in hours (default: 24)
         #[arg(long)]
         cache_ttl: Option<i64>,
+
+        /// Custom rule to extract topology from nodes
+        /// Supports two formats:
+        ///   - regex:PATTERN - Regex with optional capture group (e.g., 'regex:r(\d+)')
+        ///   - CEL expression - Uses node_name and node_labels variables (e.g., 'node_name')
+        #[arg(long)]
+        topology_rule: Option<String>,
     },
     /// Run self-test workload to validate RDMA connectivity
     SelfTest {
@@ -99,7 +106,28 @@ enum Commands {
         /// Override number of GPUs per node (default: use workload's requirement)
         #[arg(long)]
         gpus_per_node: Option<u32>,
+
+        /// Custom CEL rule to extract topology from nodes
+        /// Example: 'string(int(extract(node_name, "r(\\d+)")) / 10)'
+        #[arg(long)]
+        topology_rule: Option<String>,
+
+        /// UCX GID index for RoCE (default: auto-detect via UCX)
+        /// Override only if you need a specific GID index (e.g., "3")
+        #[arg(long)]
+        ucx_gid_index: Option<String>,
     },
+}
+
+struct ScanOptions {
+    format: String,
+    node_filter: NodeFilter,
+    detail_level: LabelDetailLevel,
+    show_usage: bool,
+    save_to: Option<String>,
+    cache_mode: CacheMode,
+    cache_ttl: Option<i64>,
+    topology_rule: Option<String>,
 }
 
 #[tokio::main]
@@ -118,6 +146,7 @@ async fn main() -> Result<()> {
             save_to,
             no_cache,
             cache_ttl,
+            topology_rule,
         } => {
             let node_filter = if rdma_only {
                 NodeFilter::RdmaOnly
@@ -135,7 +164,7 @@ async fn main() -> Result<()> {
                 CacheMode::UseCache
             };
 
-            run_scan(
+            let options = ScanOptions {
                 format,
                 node_filter,
                 detail_level,
@@ -143,8 +172,10 @@ async fn main() -> Result<()> {
                 save_to,
                 cache_mode,
                 cache_ttl,
-            )
-            .await
+                topology_rule,
+            };
+
+            run_scan(options).await
         }
         Commands::SelfTest {
             namespace,
@@ -158,6 +189,8 @@ async fn main() -> Result<()> {
             workload,
             image,
             gpus_per_node,
+            topology_rule,
+            ucx_gid_index,
         } => {
             use hermes::self_test::SelfTestConfig;
             use std::time::Duration;
@@ -198,6 +231,8 @@ async fn main() -> Result<()> {
                 cache_check: ImageCacheCheck::CheckCache,
                 cache_ttl_seconds: 1800, // 30 minutes
                 cache_check_timeout: Duration::from_secs(5),
+                topology_rule,
+                ucx_gid_index,
             };
 
             run_self_test(config).await
@@ -205,15 +240,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_scan(
-    format: String,
-    node_filter: NodeFilter,
-    detail_level: LabelDetailLevel,
-    show_usage: bool,
-    save_to: Option<String>,
-    cache_mode: CacheMode,
-    cache_ttl: Option<i64>,
-) -> Result<()> {
+async fn run_scan(options: ScanOptions) -> Result<()> {
     info!("Starting cluster scan...");
 
     // handle proxy settings for client configuration
@@ -242,31 +269,31 @@ async fn run_scan(
     let cache_manager = CacheManager::new()?;
     let context_key = CacheManager::generate_context_key(&config);
 
-    if cache_mode.should_use_cache()
-        && let Some(cached_report) = cache_manager.load(&context_key, cache_ttl)?
+    if options.cache_mode.should_use_cache()
+        && let Some(cached_report) = cache_manager.load(&context_key, options.cache_ttl)?
     {
         // use cached report
         let mut cluster_report = cached_report;
 
         // apply RDMA filter if requested
-        if matches!(node_filter, NodeFilter::RdmaOnly) {
+        if matches!(options.node_filter, NodeFilter::RdmaOnly) {
             cluster_report
                 .nodes
                 .retain(|node| node.rdma_capability.is_capable());
         }
 
         // save to file if requested
-        if let Some(save_path) = &save_to {
+        if let Some(save_path) = &options.save_to {
             info!("Saving scan results to: {}", save_path);
             let json_data = serde_json::to_string_pretty(&cluster_report)?;
             std::fs::write(save_path, json_data)?;
             println!("Scan results saved to: {}", save_path);
         }
 
-        let formatter = get_formatter(&format);
+        let formatter = get_formatter(&options.format);
         let output = formatter.format_report(&cluster_report)?;
 
-        if format == "table" {
+        if options.format == "table" {
             print!("{}", output);
         } else {
             println!("{}", output);
@@ -315,8 +342,12 @@ async fn run_scan(
     };
 
     for node in node_list.items {
-        let node_info =
-            ClusterAnalyzer::analyze_node(&node, detail_level, &cluster_topology_strategy)?;
+        let node_info = ClusterAnalyzer::analyze_node(
+            &node,
+            options.detail_level,
+            &cluster_topology_strategy,
+            options.topology_rule.as_deref(),
+        )?;
 
         // set cluster topology detection from strategy
         if cluster_report.topology_detection.is_none() {
@@ -390,7 +421,7 @@ async fn run_scan(
             cluster_report.leafgroups.push(leafgroup.clone());
         }
 
-        match node_filter {
+        match options.node_filter {
             NodeFilter::RdmaOnly if node_info.rdma_capability.is_capable() => {
                 cluster_report.nodes.push(node_info);
             }
@@ -411,7 +442,7 @@ async fn run_scan(
     }
 
     // populate resource allocations if requested
-    if show_usage {
+    if options.show_usage {
         info!("Querying pod allocations for resource usage...");
         use k8s_openapi::api::core::v1::Pod;
         let pods: Api<Pod> = Api::all(client.clone());
@@ -422,24 +453,24 @@ async fn run_scan(
     }
 
     // save scan results to cache (unless cache mode is SkipCache)
-    if cache_mode.should_use_cache() {
+    if options.cache_mode.should_use_cache() {
         cache_manager.save(&context_key, &cluster_report)?;
     }
 
     // save scan results to file if requested
-    if let Some(save_path) = &save_to {
+    if let Some(save_path) = &options.save_to {
         info!("Saving scan results to: {}", save_path);
         let json_data = serde_json::to_string_pretty(&cluster_report)?;
         std::fs::write(save_path, json_data)?;
         println!("Scan results saved to: {}", save_path);
     }
 
-    let formatter = get_formatter(&format);
+    let formatter = get_formatter(&options.format);
     let output = formatter.format_report(&cluster_report)?;
 
     // only use println! for table format since it's already formatted
     // for json/yaml, the output already includes formatting
-    if format == "table" {
+    if options.format == "table" {
         print!("{}", output);
     } else {
         println!("{}", output);

@@ -5,18 +5,22 @@ echo "Starting DeepEP internode test (MASTER) on node ${NODE_NAME}"
 echo "GPU information:"
 nvidia-smi -L
 
-GPU_COUNT=$(nvidia-smi -L | wc -l)
-echo "Detected $GPU_COUNT GPUs"
+echo "GPU_COUNT from environment: $GPU_COUNT"
 
 echo "Cloning DeepEP repository..."
 cd /tmp
 git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
 cd DeepEP
 
+# copy custom test.py script that supports 1, 2, 4, or 8 local ranks
+echo "Installing custom test.py script..."
+cp /opt/deepep-test/test.py tests/test_internode.py
+
 echo "Running DeepEP internode test with $GPU_COUNT processes per node, 2 nodes total..."
 export MASTER_ADDR=deepep-internode-master-${TEST_ID}
 export MASTER_PORT=29500
 export WORLD_SIZE=2
+export RANK=0
 export PYTHONUNBUFFERED=1
 
 echo "Starting Python test script..."

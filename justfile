@@ -48,6 +48,10 @@ nixl-self-test:
 nixl-self-test-cleanup:
     KUBECONFIG="${COREWEAVE_KUBECONFIG}" kubectl delete jobs,configmaps,services -n default -l app=nixl-transfer-test
 
+# scan CoreWeave cluster with resource usage stats (forces fresh scan)
+scan-coreweave-usage format="table":
+    KUBECONFIG="${COREWEAVE_KUBECONFIG}" cargo run -- scan --show-usage --no-cache --format {{format}}
+
 # generate SR-IOV CRDs from OpenShift operator
 gen-crds:
     curl -sSL https://raw.githubusercontent.com/openshift/sriov-network-operator/refs/heads/release-4.22/deployment/sriov-network-operator-chart/crds/sriovnetwork.openshift.io_sriovnetworks.yaml | kopium -Af - > src/crds/sriovnetworks.rs

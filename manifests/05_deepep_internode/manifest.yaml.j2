@@ -1,5 +1,17 @@
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deepep-internode-script-{{ test_id }}
+  labels:
+    app: deepep-internode-test
+    test-id: "{{ test_id }}"
+binaryData:
+{%- for key, value in configmap_files | items %}
+  {{ key }}: {{ value }}
+{%- endfor %}
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: deepep-internode-master-{{ test_id }}
@@ -57,6 +69,15 @@ spec:
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
+        - name: GPU_COUNT
+          value: "{{ gpu_count }}"
+        # ucx configuration for rdma
+        - name: UCX_TLS
+          value: "{{ ucx_tls }}"
+        {% if ucx_gid_index -%}
+        - name: UCX_IB_GID_INDEX
+          value: "{{ ucx_gid_index }}"
+        {% endif -%}
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -65,6 +86,21 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        volumeMounts:
+        - name: deepep-test-script
+          mountPath: /opt/deepep-test
+          readOnly: true
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: deepep-test-script
+        configMap:
+          name: deepep-internode-script-{{ test_id }}
+          defaultMode: 493
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
 ---
 apiVersion: batch/v1
 kind: Job
@@ -107,6 +143,15 @@ spec:
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
+        - name: GPU_COUNT
+          value: "{{ gpu_count }}"
+        # ucx configuration for rdma
+        - name: UCX_TLS
+          value: "{{ ucx_tls }}"
+        {% if ucx_gid_index -%}
+        - name: UCX_IB_GID_INDEX
+          value: "{{ ucx_gid_index }}"
+        {% endif -%}
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -115,3 +160,18 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        volumeMounts:
+        - name: deepep-test-script
+          mountPath: /opt/deepep-test
+          readOnly: true
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: deepep-test-script
+        configMap:
+          name: deepep-internode-script-{{ test_id }}
+          defaultMode: 493
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi

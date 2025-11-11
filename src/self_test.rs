@@ -41,6 +41,8 @@ pub struct SelfTestConfig {
     pub cache_ttl_seconds: u64,
     #[serde(skip)]
     pub cache_check_timeout: Duration,
+    pub topology_rule: Option<String>,
+    pub ucx_gid_index: Option<String>,
 }
 
 impl Object for SelfTestConfig {
@@ -634,13 +636,16 @@ impl SelfTestOrchestrator {
                 .or_else(|| detected.clone())
                 .unwrap_or_else(|| "roce-p2".to_string());
 
-            // open up UCX transport list to include GDRCOPY and CUDA IPC if GPU requested
+            // for RoCE with SR-IOV, use conservative transport list (rc and tcp only)
+            // ud/dc can cause issues with some SR-IOV configurations
             let tls = if self.config.gpu_requirement.requires_gpu() {
-                "rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy".to_string()
+                "rc,tcp,cuda_copy,cuda_ipc".to_string()
             } else {
-                "rc,ud,dc,tcp".to_string()
+                "rc,tcp".to_string()
             };
-            (tls, "3".to_string(), Some(network))
+            // use CLI-specified GID index, or let UCX auto-detect
+            let gid_index = self.config.ucx_gid_index.clone().unwrap_or_default();
+            (tls, gid_index, Some(network))
         } else {
             // for InfiniBand, let UCX auto-select or specify full list
             tracing::info!("Detected InfiniBand, configuring UCX transports");
@@ -806,6 +811,7 @@ impl SelfTestOrchestrator {
                 LabelDetailLevel::Detailed,
                 &cluster_topology_strategy,
                 check_image,
+                self.config.topology_rule.as_deref(),
             )?;
 
             // set cluster topology detection from strategy
@@ -1096,7 +1102,8 @@ impl SelfTestOrchestrator {
 
             // wait for pods to be ready and monitor execution
             test_execution.status = TestStatus::Running;
-            self.monitor_test_execution(&mut test_execution).await?;
+            self.monitor_test_execution(&mut test_execution, workload.as_ref())
+                .await?;
         }
 
         Ok(test_execution)
@@ -1209,7 +1216,11 @@ impl SelfTestOrchestrator {
         Ok(())
     }
 
-    async fn monitor_test_execution(&self, test_execution: &mut TestExecution) -> Result<()> {
+    async fn monitor_test_execution(
+        &self,
+        test_execution: &mut TestExecution,
+        workload: &dyn workloads::TestWorkload,
+    ) -> Result<()> {
         use std::time::Duration;
         use tokio::time::sleep;
 
@@ -1219,7 +1230,7 @@ impl SelfTestOrchestrator {
         let log_stream_handle = self.spawn_log_streamers(&test_execution.test_id);
 
         // wait for test completion or timeout
-        let timeout = self.config.timeout;
+        let timeout = workload.expected_duration();
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
@@ -1264,7 +1275,8 @@ impl SelfTestOrchestrator {
 
         tokio::spawn(async move {
             use futures::TryStreamExt;
-            use k8s_openapi::api::core::v1::Pod;
+            use k8s_openapi::api::core::v1::{Event, Pod};
+            use kube::runtime::WatchStreamExt;
             use kube::{Api, api::LogParams};
             use owo_colors::OwoColorize;
             use std::collections::HashMap;
@@ -1272,7 +1284,7 @@ impl SelfTestOrchestrator {
             use tokio::sync::mpsc;
             use tokio::time::sleep;
 
-            // create channel for interwoven log output
+            // create channel for interwoven log output and events
             let (tx, mut rx) = mpsc::unbounded_channel::<(String, String)>();
 
             let mut pod_colors: HashMap<String, usize> = HashMap::new();
@@ -1305,7 +1317,7 @@ impl SelfTestOrchestrator {
             // wait a bit for pods to be created
             sleep(Duration::from_secs(5)).await;
 
-            let pods: Api<Pod> = Api::namespaced(client, &namespace);
+            let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
             let test_id_short = &test_id[..8];
 
             // discover pods with this test-id
@@ -1319,7 +1331,76 @@ impl SelfTestOrchestrator {
                 }
             };
 
-            let mut stream_tasks = vec![];
+            // collect pod names for event filtering
+            let test_pod_names: std::collections::HashSet<String> = pod_list
+                .items
+                .iter()
+                .filter_map(|pod| pod.metadata.name.clone())
+                .collect();
+
+            // spawn event watcher for these pods
+            let events: Api<Event> = Api::namespaced(client.clone(), &namespace);
+            let event_tx = tx.clone();
+
+            let event_watcher = tokio::spawn(async move {
+                use futures::StreamExt;
+                use kube::runtime::watcher;
+
+                // watch all events in namespace (can't filter by label since events don't inherit pod labels)
+                let watcher_config = watcher::Config::default();
+
+                let event_stream = watcher(events, watcher_config).applied_objects();
+                futures::pin_mut!(event_stream);
+
+                while let Some(event_result) = event_stream.next().await {
+                    match event_result {
+                        Ok(event) => {
+                            // extract pod name from involved object
+                            let pod_name = event
+                                .involved_object
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| "unknown".to_string());
+
+                            // only process events for our test pods
+                            if !test_pod_names.contains(&pod_name) {
+                                continue;
+                            }
+
+                            // format event message
+                            let reason = event.reason.as_deref().unwrap_or("Unknown");
+                            let message = event.message.as_deref().unwrap_or("");
+                            let event_type = event.type_.as_deref().unwrap_or("Normal");
+
+                            // only show Warning and Error events, or important Normal events
+                            let should_show = event_type != "Normal"
+                                || reason == "Pulling"
+                                || reason == "Pulled"
+                                || reason == "Created"
+                                || reason == "Started"
+                                || reason == "Failed"
+                                || reason == "Scheduled"
+                                || reason == "FailedScheduling"
+                                || reason == "FailedMount";
+
+                            if should_show {
+                                let formatted = if event_type == "Normal" {
+                                    format!("EVENT: {} - {}", reason, message)
+                                } else {
+                                    format!("EVENT [{}]: {} - {}", event_type, reason, message)
+                                };
+
+                                let _ = event_tx.send((pod_name, formatted));
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Event watch error: {}", e);
+                        }
+                    }
+                }
+            });
+
+            let mut stream_tasks = vec![event_watcher];
 
             for pod in pod_list.items {
                 if let Some(pod_name) = pod.metadata.name {
@@ -1455,6 +1536,8 @@ impl Default for SelfTestConfig {
             cache_check: ImageCacheCheck::CheckCache,
             cache_ttl_seconds: 1800, // 30 minutes
             cache_check_timeout: Duration::from_secs(5),
+            topology_rule: None,
+            ucx_gid_index: None,
         }
     }
 }
