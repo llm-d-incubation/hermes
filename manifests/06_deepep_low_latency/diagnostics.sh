@@ -1,15 +1,19 @@
 #!/bin/bash
 # shared RDMA diagnostics script
 
-# returns the RDMA device name that corresponds to net1 SR-IOV interface
-get_net1_rdma_device() {
-  if [ -d /sys/class/net/net1 ]; then
-    net1_pci=$(readlink -f /sys/class/net/net1/device 2>/dev/null | xargs basename)
+# returns the RDMA device name that corresponds to SR-IOV interface
+# uses SRIOV_INTERFACE env var (defaults to net1)
+get_sriov_rdma_device() {
+  local iface="${SRIOV_INTERFACE:-net1}"
+
+  if [ -d "/sys/class/net/$iface" ]; then
+    local iface_pci
+    iface_pci=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null | xargs basename)
     for dev in /sys/class/infiniband/*; do
       if [ -d "$dev" ]; then
         dev_name=$(basename "$dev")
         dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
-        if [ "$dev_pci" = "$net1_pci" ]; then
+        if [ "$dev_pci" = "$iface_pci" ]; then
           echo "$dev_name"
           return 0
         fi
@@ -82,25 +86,27 @@ print_rdma_diagnostics() {
   echo "GPU topology:"
   nvidia-smi topo -m 2>/dev/null || echo "GPU topology not available"
 
+  local iface="${SRIOV_INTERFACE:-net1}"
   echo ""
-  echo "Checking net1 SR-IOV interface:"
-  if [ -d /sys/class/net/net1 ]; then
-    echo "  net1 exists"
-    net1_pci=$(readlink -f /sys/class/net/net1/device 2>/dev/null | xargs basename)
-    echo "  PCI address: $net1_pci"
+  echo "Checking SR-IOV interface ($iface):"
+  if [ -d "/sys/class/net/$iface" ]; then
+    echo "  $iface exists"
+    local iface_pci
+    iface_pci=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null | xargs basename)
+    echo "  PCI address: $iface_pci"
 
     # find matching RDMA device
     for dev in /sys/class/infiniband/*; do
       if [ -d "$dev" ]; then
         dev_name=$(basename "$dev")
         dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
-        if [ "$dev_pci" = "$net1_pci" ]; then
+        if [ "$dev_pci" = "$iface_pci" ]; then
           echo "  Matching RDMA device: $dev_name"
         fi
       fi
     done
   else
-    echo "  net1 not found!"
+    echo "  $iface not found!"
   fi
 
   echo "=== End Diagnostics ==="

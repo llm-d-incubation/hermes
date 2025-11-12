@@ -1,5 +1,4 @@
 use anyhow::Result;
-use minijinja::Environment;
 use std::time::Duration;
 
 use super::{RdmaInfo, TemplateContext, TestWorkload};
@@ -41,9 +40,9 @@ impl TestWorkload for NixlTransferTest {
             .with_server_service("nixl-test-target")
             .with_embedded_files("01_nixl_transfer");
 
-        // render template
+        // render template with configured environment
         let template_str = include_str!("../../manifests/01_nixl_transfer/manifest.yaml.j2");
-        let mut env = Environment::new();
+        let mut env = super::create_template_environment();
         env.add_template("nixl", template_str)?;
         let template = env.get_template("nixl")?;
         let rendered = template.render(&context)?;

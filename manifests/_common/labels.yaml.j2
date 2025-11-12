@@ -1,0 +1,24 @@
+{# common label patterns #}
+{# these macros are called flush-left and output labels with proper indentation based on context #}
+
+{# labels for metadata (4 spaces) - used in Job/Service/ConfigMap metadata.labels #}
+{%- macro job_labels(app_label, role) %}
+    app: {{ app_label }}
+    role: {{ role }}
+    test-id: "{{ test_id }}"
+{%- endmacro %}
+
+{%- macro service_labels(app_label, role=None) %}
+    app: {{ app_label }}
+{%- if role %}
+    role: {{ role }}
+{%- endif %}
+    test-id: "{{ test_id }}"
+{%- endmacro %}
+
+{# labels for pod template metadata (8 spaces) - used in spec.template.metadata.labels #}
+{%- macro pod_labels(app_label, role) %}
+        app: {{ app_label }}
+        role: {{ role }}
+        test-id: "{{ test_id }}"
+{%- endmacro %}

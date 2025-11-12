@@ -12,13 +12,14 @@ echo "Detected $GPU_COUNT GPUs"
 source /opt/deepep-test/diagnostics.sh
 print_rdma_diagnostics
 
-# detect and configure nvshmem to use the correct RDMA device
-RDMA_DEVICE=$(get_net1_rdma_device)
+# detect and configure RDMA device for nvshmem and NCCL
+RDMA_DEVICE=$(get_sriov_rdma_device)
 if [ -n "$RDMA_DEVICE" ]; then
   export NVSHMEM_HCA_LIST="$RDMA_DEVICE"
-  echo "Configured NVSHMEM to use RDMA device: $RDMA_DEVICE"
+  export NCCL_IB_HCA="$RDMA_DEVICE"
+  echo "Configured NVSHMEM_HCA_LIST and NCCL_IB_HCA to use RDMA device: $RDMA_DEVICE (interface: ${SRIOV_INTERFACE:-net1})"
 else
-  echo "WARNING: Could not detect RDMA device for net1, nvshmem may fail"
+  echo "WARNING: Could not detect RDMA device for SR-IOV interface ${SRIOV_INTERFACE:-net1}, RDMA operations may fail"
 fi
 
 echo "Cloning DeepEP repository..."

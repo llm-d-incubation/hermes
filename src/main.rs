@@ -3,7 +3,7 @@ use clap::Parser;
 use k8s_openapi::api::core::v1::Node;
 use kube::{Api, Client, Config, api::ListParams};
 use std::collections::{BTreeMap, HashMap};
-use tracing::info;
+use tracing::{info, warn};
 
 use hermes::analyzer::ClusterAnalyzer;
 use hermes::cache::CacheManager;
@@ -287,7 +287,7 @@ async fn run_scan(options: ScanOptions) -> Result<()> {
             info!("Saving scan results to: {}", save_path);
             let json_data = serde_json::to_string_pretty(&cluster_report)?;
             std::fs::write(save_path, json_data)?;
-            println!("Scan results saved to: {}", save_path);
+            info!("Scan results saved to: {}", save_path);
         }
 
         let formatter = get_formatter(&options.format);
@@ -432,6 +432,19 @@ async fn run_scan(options: ScanOptions) -> Result<()> {
         }
     }
 
+    // log aggregated topology rule evaluation failures
+    let topology_rule_failures: Vec<_> = cluster_report
+        .nodes
+        .iter()
+        .filter(|n| n.topology_rule_error.is_some())
+        .collect();
+    if !topology_rule_failures.is_empty() {
+        warn!(
+            "Failed to evaluate topology rule for {} node(s)",
+            topology_rule_failures.len()
+        );
+    }
+
     // detect SR-IOV networks for OpenShift (not applicable to CoreWeave or GKE)
     if matches!(
         platform_type,
@@ -462,7 +475,7 @@ async fn run_scan(options: ScanOptions) -> Result<()> {
         info!("Saving scan results to: {}", save_path);
         let json_data = serde_json::to_string_pretty(&cluster_report)?;
         std::fs::write(save_path, json_data)?;
-        println!("Scan results saved to: {}", save_path);
+        info!("Scan results saved to: {}", save_path);
     }
 
     let formatter = get_formatter(&options.format);
@@ -541,7 +554,7 @@ async fn run_self_test(config: hermes::self_test::SelfTestConfig) -> Result<()> 
         info!("Loading scan data from file: {}", scan_file);
         let scan_data = std::fs::read_to_string(scan_file)?;
         let report: ClusterReport = serde_json::from_str(&scan_data)?;
-        println!("Loaded scan data from: {}", scan_file);
+        info!("Loaded scan data from: {}", scan_file);
         Some(report)
     } else {
         // try to load from cache
@@ -550,10 +563,10 @@ async fn run_self_test(config: hermes::self_test::SelfTestConfig) -> Result<()> 
         let context_key = CacheManager::generate_context_key(&config);
 
         if let Some(report) = cache_manager.load(&context_key, None)? {
-            println!("Using cached cluster scan data");
+            info!("Using cached cluster scan data");
             Some(report)
         } else {
-            println!("Will perform fresh cluster scan for node selection");
+            info!("Will perform fresh cluster scan for node selection");
             None
         }
     };
@@ -561,7 +574,7 @@ async fn run_self_test(config: hermes::self_test::SelfTestConfig) -> Result<()> 
     // note: cached_scan can be used in future for intelligent node selection optimization
 
     if config.execution_mode.is_dry_run() {
-        println!("Dry run mode: will render manifests to stdout without deploying");
+        info!("Dry run mode: will render manifests to stdout without deploying");
     }
 
     // setup kubernetes client (unless in dry run mode)

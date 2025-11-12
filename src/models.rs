@@ -145,7 +145,7 @@ impl ImageCacheCheck {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TopologyType {
     LeafGroup, // CoreWeave leafgroup-based
     Zone,      // Kubernetes zone-based
@@ -215,6 +215,9 @@ pub struct NodeInfo {
     // image cache tracking
     pub image_cache_status: ImageCacheStatus,
     pub image_cache_checked_at: Option<DateTime<Utc>>,
+    // topology rule evaluation errors (for aggregated logging)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_rule_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

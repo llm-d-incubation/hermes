@@ -1,0 +1,14 @@
+{# SR-IOV network annotations #}
+{%- macro sriov_annotation_simple() %}
+{%- if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
+{%- endif %}
+{%- endmacro %}
+
+{%- macro sriov_annotation_with_interface() %}
+{%- if sriov_network %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{"name": "{{ sriov_network }}", "interface": "{{ sriov_interface }}"}]'
+{%- endif %}
+{%- endmacro %}

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use minijinja::Environment;
 use std::time::Duration;
 
 use super::{RdmaInfo, TemplateContext, TestWorkload};
@@ -43,9 +42,9 @@ impl TestWorkload for DeepEpInternodeTest {
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
             .with_embedded_files("05_deepep_internode");
 
-        // render template
+        // render template with configured environment
         let template_str = include_str!("../../manifests/05_deepep_internode/manifest.yaml.j2");
-        let mut env = Environment::new();
+        let mut env = super::create_template_environment();
         env.add_template("deepep_internode", template_str)?;
         let template = env.get_template("deepep_internode")?;
         let rendered = template.render(&context)?;

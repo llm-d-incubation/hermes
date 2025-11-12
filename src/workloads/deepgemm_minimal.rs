@@ -1,5 +1,4 @@
 use anyhow::Result;
-use minijinja::Environment;
 use std::time::Duration;
 
 use super::{RdmaInfo, TemplateContext, TestWorkload};
@@ -39,9 +38,9 @@ impl TestWorkload for DeepGemmMinimalTest {
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
             .with_embedded_files("02_deepgemm_minimal");
 
-        // render template
+        // render template with configured environment
         let template_str = include_str!("../../manifests/02_deepgemm_minimal/manifest.yaml.j2");
-        let mut env = Environment::new();
+        let mut env = super::create_template_environment();
         env.add_template("deepgemm", template_str)?;
         let template = env.get_template("deepgemm")?;
         let rendered = template.render(&context)?;
