@@ -22,7 +22,6 @@ jobs:
             artifact_name: hermes
             asset_name: hermes-linux-amd64
           - os: ubuntu-latest
-            container: registry.access.redhat.com/ubi9/ubi:latest
             target: x86_64-unknown-linux-musl
             artifact_name: hermes
             asset_name: hermes-linux-amd64-musl
@@ -42,10 +41,12 @@ jobs:
         if: matrix.container != ''
         run: |
           dnf install -y gcc make perl-core openssl-devel libibverbs-devel
-          # install musl-gcc for musl target
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            dnf install -y musl-gcc musl-libc-static
-          fi
+
+      - name: Install build dependencies (Ubuntu musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
