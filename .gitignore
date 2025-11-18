@@ -13,3 +13,6 @@ CLAUDE.md
 # demo files
 *.cast
 *.gif
+
+# temporary/scratch files
+/cruft/

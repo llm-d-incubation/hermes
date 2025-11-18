@@ -426,6 +426,7 @@ impl PlatformDetector for GenericKubernetesPlatform {
         let labels = node.metadata.labels.as_ref().unwrap_or(&empty_labels);
 
         if let Some(cap) = capacity {
+            // first check hardcoded common resources
             if cap.contains_key("rdma/roce_gdr") {
                 let quantity = cap
                     .get("rdma/roce_gdr")
@@ -446,6 +447,29 @@ impl PlatformDetector for GenericKubernetesPlatform {
                     Some("InfiniBand".to_string()),
                     Some(format!("rdma/ib: {}", quantity)),
                 );
+            }
+
+            // scan for any resource that looks like RDMA (from NVIDIA Network Operator or other sources)
+            for (resource_name, quantity) in cap.iter() {
+                let name_lower = resource_name.to_lowercase();
+                if name_lower.contains("rdma")
+                    || name_lower.contains("roce")
+                    || name_lower.contains("ib")
+                {
+                    let rdma_type = if name_lower.contains("roce") {
+                        "RoCE"
+                    } else if name_lower.contains("ib") && !name_lower.contains("ib-") {
+                        "InfiniBand"
+                    } else {
+                        "RDMA"
+                    };
+
+                    return (
+                        true,
+                        Some(rdma_type.to_string()),
+                        Some(format!("{}: {}", resource_name, quantity.0)),
+                    );
+                }
             }
         }
 
@@ -658,4 +682,35 @@ fn parse_gke_networking_info(
     let fabric_domain = extract_gke_fabric_domain(annotations);
 
     (rdma_interfaces, pci_topology, fabric_domain)
+}
+
+/// check node capacity for RDMA resources from a list of resource names
+/// returns (is_capable, rdma_type_hint, resource_string)
+pub fn detect_rdma_from_resource_list(
+    node: &Node,
+    resource_names: &[String],
+) -> (bool, Option<String>, Option<String>) {
+    let capacity = node.status.as_ref().and_then(|s| s.capacity.as_ref());
+
+    if let Some(cap) = capacity {
+        for resource_name in resource_names {
+            if let Some(quantity) = cap.get(resource_name.as_str()) {
+                let rdma_type = if resource_name.contains("roce") {
+                    "RoCE"
+                } else if resource_name.contains("ib") {
+                    "InfiniBand"
+                } else {
+                    "RDMA"
+                };
+
+                return (
+                    true,
+                    Some(rdma_type.to_string()),
+                    Some(format!("{}: {}", resource_name, quantity.0)),
+                );
+            }
+        }
+    }
+
+    (false, None, None)
 }

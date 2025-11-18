@@ -84,6 +84,12 @@ enum Commands {
         #[arg(long)]
         sriov_network: Option<String>,
 
+        /// Use SR-IOV VF resources for workloads (default: true). Use --no-prefer-sriov-resources for direct PF access.
+        /// When enabled: requests network-specific SR-IOV resources (e.g., openshift.io/p2rdma) - good for multi-tenancy
+        /// When disabled: requests generic RDMA resources (e.g., rdma/roce_gdr) for direct physical NIC access - maximum performance
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        prefer_sriov_resources: bool,
+
         /// Request GPU resources in test pods (enables GDRCOPY and CUDA IPC transports)
         #[arg(long, default_value = "true")]
         request_gpu: bool,
@@ -184,6 +190,7 @@ async fn main() -> Result<()> {
             load_from,
             dry_run,
             sriov_network,
+            prefer_sriov_resources,
             request_gpu,
             no_cleanup_on_signal,
             workload,
@@ -214,6 +221,7 @@ async fn main() -> Result<()> {
                 },
                 timeout: Duration::from_secs(300),
                 sriov_network,
+                prefer_sriov_resources,
                 gpu_requirement: if request_gpu {
                     GpuRequirement::Required
                 } else {
@@ -269,7 +277,7 @@ async fn run_scan(options: ScanOptions) -> Result<()> {
     let cache_manager = CacheManager::new()?;
     let context_key = CacheManager::generate_context_key(&config);
 
-    if options.cache_mode.should_use_cache()
+    let cluster_report = if options.cache_mode.should_use_cache()
         && let Some(cached_report) = cache_manager.load(&context_key, options.cache_ttl)?
     {
         // use cached report
@@ -282,193 +290,187 @@ async fn run_scan(options: ScanOptions) -> Result<()> {
                 .retain(|node| node.rdma_capability.is_capable());
         }
 
-        // save to file if requested
-        if let Some(save_path) = &options.save_to {
-            info!("Saving scan results to: {}", save_path);
-            let json_data = serde_json::to_string_pretty(&cluster_report)?;
-            std::fs::write(save_path, json_data)?;
-            info!("Scan results saved to: {}", save_path);
-        }
-
-        let formatter = get_formatter(&options.format);
-        let output = formatter.format_report(&cluster_report)?;
-
-        if options.format == "table" {
-            print!("{}", output);
-        } else {
-            println!("{}", output);
-        }
-
-        return Ok(());
-    }
-
-    let nodes: Api<Node> = Api::all(client.clone());
-
-    let node_list = nodes.list(&ListParams::default()).await?;
-    info!("Found {} nodes in cluster", node_list.items.len());
-
-    // detect platform type from first node
-    let platform_type = if let Some(first_node) = node_list.items.first() {
-        let empty_labels = BTreeMap::new();
-        let labels = first_node.metadata.labels.as_ref().unwrap_or(&empty_labels);
-        detect_platform_from_labels(labels).get_platform_type()
+        cluster_report
     } else {
-        PlatformType::GenericKubernetes
-    };
+        let nodes: Api<Node> = Api::all(client.clone());
 
-    // determine cluster-wide topology strategy before analyzing individual nodes
-    let cluster_topology_strategy =
-        ClusterAnalyzer::determine_cluster_topology_strategy(&node_list.items, &platform_type);
+        let node_list = nodes.list(&ListParams::default()).await?;
+        info!("Found {} nodes in cluster", node_list.items.len());
 
-    let mut cluster_report = ClusterReport {
-        total_nodes: node_list.items.len(),
-        rdma_nodes: 0,
-        platform_type,
-        api_server_url: config.cluster_url.to_string(),
-        topology_detection: None,
-        rdma_types: Vec::new(),
-        topology_blocks: HashMap::new(),
-        topology_gpu_counts: HashMap::new(),
-        ib_fabrics: Vec::new(),
-        superpods: Vec::new(),
-        leafgroups: Vec::new(),
-        sriov_networks: Vec::new(),
-        nodes: Vec::new(),
-        gpu_nodes: 0,
-        gpu_types: Vec::new(),
-        total_gpus: 0,
-        image_checked: None,
-        cache_check_timestamp: None,
-    };
+        // detect platform type from first node
+        let platform_type = if let Some(first_node) = node_list.items.first() {
+            let empty_labels = BTreeMap::new();
+            let labels = first_node.metadata.labels.as_ref().unwrap_or(&empty_labels);
+            detect_platform_from_labels(labels).get_platform_type()
+        } else {
+            PlatformType::GenericKubernetes
+        };
 
-    for node in node_list.items {
-        let node_info = ClusterAnalyzer::analyze_node(
-            &node,
-            options.detail_level,
-            &cluster_topology_strategy,
-            options.topology_rule.as_deref(),
-        )?;
+        // determine cluster-wide topology strategy before analyzing individual nodes
+        let cluster_topology_strategy =
+            ClusterAnalyzer::determine_cluster_topology_strategy(&node_list.items, &platform_type);
 
-        // set cluster topology detection from strategy
-        if cluster_report.topology_detection.is_none() {
-            cluster_report.topology_detection = cluster_topology_strategy.clone();
-        }
+        // detect NVIDIA Network Operator and extract RDMA resource names
+        // TODO: nvidia_network module removed, need to re-implement detection
+        let nvidia_rdma_resources: Option<Vec<String>> = None;
 
-        if node_info.rdma_capability.is_capable() {
-            cluster_report.rdma_nodes += 1;
-        }
+        let mut cluster_report = ClusterReport {
+            total_nodes: node_list.items.len(),
+            rdma_nodes: 0,
+            platform_type,
+            api_server_url: config.cluster_url.to_string(),
+            topology_detection: None,
+            rdma_types: Vec::new(),
+            topology_blocks: HashMap::new(),
+            topology_gpu_counts: HashMap::new(),
+            ib_fabrics: Vec::new(),
+            superpods: Vec::new(),
+            leafgroups: Vec::new(),
+            sriov_networks: Vec::new(),
+            nvidia_network_operator_resources: nvidia_rdma_resources.clone(),
+            nodes: Vec::new(),
+            gpu_nodes: 0,
+            gpu_types: Vec::new(),
+            total_gpus: 0,
+            image_checked: None,
+            cache_check_timestamp: None,
+        };
 
-        // collect GPU statistics
-        if let Some(gpu_count) = node_info.gpu_count {
-            cluster_report.gpu_nodes += 1;
-            cluster_report.total_gpus += gpu_count;
-        }
+        for node in node_list.items {
+            let node_info = ClusterAnalyzer::analyze_node(
+                &node,
+                options.detail_level,
+                &cluster_topology_strategy,
+                options.topology_rule.as_deref(),
+            )?;
 
-        if let Some(gpu_type) = &node_info.gpu_type
-            && !cluster_report.gpu_types.contains(gpu_type)
-        {
-            cluster_report.gpu_types.push(gpu_type.clone());
-        }
+            // set cluster topology detection from strategy
+            if cluster_report.topology_detection.is_none() {
+                cluster_report.topology_detection = cluster_topology_strategy.clone();
+            }
 
-        // collect unique RDMA types
-        if let Some(rdma_type) = &node_info.rdma_type
-            && !cluster_report.rdma_types.contains(rdma_type)
-        {
-            cluster_report.rdma_types.push(rdma_type.clone());
-        }
+            if node_info.rdma_capability.is_capable() {
+                cluster_report.rdma_nodes += 1;
+            }
 
-        // collect topology blocks and GPU counts per block
-        if let Some(topology_block) = &node_info.topology_block {
-            *cluster_report
-                .topology_blocks
-                .entry(topology_block.clone())
-                .or_insert(0) += 1;
-
+            // collect GPU statistics
             if let Some(gpu_count) = node_info.gpu_count {
-                // for CoreWeave, aggregate GPUs by fabric instead of leafgroup
-                let aggregation_key = if cluster_report.platform_type == PlatformType::CoreWeave {
-                    node_info
-                        .ib_fabric
-                        .clone()
-                        .unwrap_or_else(|| topology_block.clone())
-                } else {
-                    topology_block.clone()
-                };
+                cluster_report.gpu_nodes += 1;
+                cluster_report.total_gpus += gpu_count;
+            }
 
+            if let Some(gpu_type) = &node_info.gpu_type
+                && !cluster_report.gpu_types.contains(gpu_type)
+            {
+                cluster_report.gpu_types.push(gpu_type.clone());
+            }
+
+            // collect unique RDMA types
+            if let Some(rdma_type) = &node_info.rdma_type
+                && !cluster_report.rdma_types.contains(rdma_type)
+            {
+                cluster_report.rdma_types.push(rdma_type.clone());
+            }
+
+            // collect topology blocks and GPU counts per block
+            if let Some(topology_block) = &node_info.topology_block {
                 *cluster_report
-                    .topology_gpu_counts
-                    .entry(aggregation_key)
-                    .or_insert(0) += gpu_count;
+                    .topology_blocks
+                    .entry(topology_block.clone())
+                    .or_insert(0) += 1;
+
+                if let Some(gpu_count) = node_info.gpu_count {
+                    // for CoreWeave, aggregate GPUs by fabric instead of leafgroup
+                    let aggregation_key = if cluster_report.platform_type == PlatformType::CoreWeave
+                    {
+                        node_info
+                            .ib_fabric
+                            .clone()
+                            .unwrap_or_else(|| topology_block.clone())
+                    } else {
+                        topology_block.clone()
+                    };
+
+                    *cluster_report
+                        .topology_gpu_counts
+                        .entry(aggregation_key)
+                        .or_insert(0) += gpu_count;
+                }
+            }
+
+            // collect unique values for summary
+            if let Some(fabric) = &node_info.ib_fabric
+                && !cluster_report.ib_fabrics.contains(fabric)
+            {
+                cluster_report.ib_fabrics.push(fabric.clone());
+            }
+
+            if let Some(superpod) = &node_info.superpod
+                && !cluster_report.superpods.contains(superpod)
+            {
+                cluster_report.superpods.push(superpod.clone());
+            }
+
+            if let Some(leafgroup) = &node_info.leafgroup
+                && !cluster_report.leafgroups.contains(leafgroup)
+            {
+                cluster_report.leafgroups.push(leafgroup.clone());
+            }
+
+            match options.node_filter {
+                NodeFilter::RdmaOnly if node_info.rdma_capability.is_capable() => {
+                    cluster_report.nodes.push(node_info);
+                }
+                NodeFilter::All => {
+                    cluster_report.nodes.push(node_info);
+                }
+                _ => {}
             }
         }
 
-        // collect unique values for summary
-        if let Some(fabric) = &node_info.ib_fabric
-            && !cluster_report.ib_fabrics.contains(fabric)
-        {
-            cluster_report.ib_fabrics.push(fabric.clone());
+        // log aggregated topology rule evaluation failures
+        let topology_rule_failures: Vec<_> = cluster_report
+            .nodes
+            .iter()
+            .filter(|n| n.topology_rule_error.is_some())
+            .collect();
+        if !topology_rule_failures.is_empty() {
+            warn!(
+                "Failed to evaluate topology rule for {} node(s)",
+                topology_rule_failures.len()
+            );
         }
 
-        if let Some(superpod) = &node_info.superpod
-            && !cluster_report.superpods.contains(superpod)
-        {
-            cluster_report.superpods.push(superpod.clone());
+        // detect SR-IOV networks for OpenShift (not applicable to CoreWeave or GKE)
+        if matches!(
+            platform_type,
+            PlatformType::OpenShift | PlatformType::GenericKubernetes
+        ) {
+            info!("Detecting SR-IOV networks across all namespaces...");
+            cluster_report.sriov_networks = detect_sriov_networks(&client).await;
         }
 
-        if let Some(leafgroup) = &node_info.leafgroup
-            && !cluster_report.leafgroups.contains(leafgroup)
-        {
-            cluster_report.leafgroups.push(leafgroup.clone());
+        // populate resource allocations if requested
+        if options.show_usage {
+            info!("Querying pod allocations for resource usage...");
+            use k8s_openapi::api::core::v1::Pod;
+            let pods: Api<Pod> = Api::all(client.clone());
+            let pod_list = pods.list(&ListParams::default()).await?;
+
+            ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
+            ClusterAnalyzer::populate_resource_allocations(
+                &mut cluster_report.nodes,
+                &pod_list.items,
+            );
         }
 
-        match options.node_filter {
-            NodeFilter::RdmaOnly if node_info.rdma_capability.is_capable() => {
-                cluster_report.nodes.push(node_info);
-            }
-            NodeFilter::All => {
-                cluster_report.nodes.push(node_info);
-            }
-            _ => {}
+        // save scan results to cache (unless cache mode is SkipCache)
+        if options.cache_mode.should_use_cache() {
+            cache_manager.save(&context_key, &cluster_report)?;
         }
-    }
 
-    // log aggregated topology rule evaluation failures
-    let topology_rule_failures: Vec<_> = cluster_report
-        .nodes
-        .iter()
-        .filter(|n| n.topology_rule_error.is_some())
-        .collect();
-    if !topology_rule_failures.is_empty() {
-        warn!(
-            "Failed to evaluate topology rule for {} node(s)",
-            topology_rule_failures.len()
-        );
-    }
-
-    // detect SR-IOV networks for OpenShift (not applicable to CoreWeave or GKE)
-    if matches!(
-        platform_type,
-        PlatformType::OpenShift | PlatformType::GenericKubernetes
-    ) {
-        info!("Detecting SR-IOV networks across all namespaces...");
-        cluster_report.sriov_networks = detect_sriov_networks(&client).await;
-    }
-
-    // populate resource allocations if requested
-    if options.show_usage {
-        info!("Querying pod allocations for resource usage...");
-        use k8s_openapi::api::core::v1::Pod;
-        let pods: Api<Pod> = Api::all(client.clone());
-        let pod_list = pods.list(&ListParams::default()).await?;
-
-        ClusterAnalyzer::populate_gpu_allocations(&mut cluster_report.nodes, &pod_list.items);
-        ClusterAnalyzer::populate_resource_allocations(&mut cluster_report.nodes, &pod_list.items);
-    }
-
-    // save scan results to cache (unless cache mode is SkipCache)
-    if options.cache_mode.should_use_cache() {
-        cache_manager.save(&context_key, &cluster_report)?;
-    }
+        cluster_report
+    };
 
     // save scan results to file if requested
     if let Some(save_path) = &options.save_to {

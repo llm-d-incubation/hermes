@@ -25,6 +25,7 @@ metadata:
   labels:
 {{- job_labels("pplx-kernels-test", "master") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
@@ -50,6 +51,7 @@ metadata:
   labels:
 {{- job_labels("pplx-kernels-test", "worker") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:

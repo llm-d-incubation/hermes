@@ -11,6 +11,7 @@ metadata:
   labels:
 {{- job_labels("deepgemm-simple-test", "node1") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
@@ -51,6 +52,7 @@ metadata:
   labels:
 {{- job_labels("deepgemm-simple-test", "node2") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:

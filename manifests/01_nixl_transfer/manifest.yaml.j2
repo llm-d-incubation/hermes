@@ -33,6 +33,7 @@ metadata:
   labels:
 {{- job_labels("nixl-transfer-test", "target") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
@@ -68,6 +69,7 @@ metadata:
   labels:
 {{- job_labels("nixl-transfer-test", "initiator") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:

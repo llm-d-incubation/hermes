@@ -51,6 +51,11 @@ impl<'a> std::fmt::Display for ManifestHeader<'a> {
             "#   rdma_resource_type: {}",
             self.rdma_info.rdma_resource_type
         )?;
+
+        if let Some(ref sriov_res) = self.rdma_info.sriov_network_resource {
+            writeln!(f, "#   sriov_network_resource: {}", sriov_res)?;
+        }
+
         writeln!(f, "#   ucx_tls: {}", self.rdma_info.ucx_tls)?;
 
         if !self.rdma_info.ucx_gid_index.is_empty() {
@@ -85,6 +90,7 @@ pub struct SelfTestConfig {
     #[serde(skip)]
     pub timeout: Duration,
     pub sriov_network: Option<String>,
+    pub prefer_sriov_resources: bool, // if true, use SR-IOV VF resources; if false, use generic RDMA
     pub gpu_requirement: GpuRequirement,
     pub signal_handling: SignalHandling,
     pub workload: Option<String>,
@@ -139,6 +145,7 @@ pub struct SelectedNode {
     pub topology_block: Option<String>,
     pub platform_specific_info: HashMap<String, String>,
     pub rdma_resource: Option<String>,
+    pub sriov_resources: HashMap<String, String>,
 }
 
 impl Object for SelectedNode {
@@ -474,6 +481,7 @@ impl SelectedNode {
             topology_block: node_info.topology_block.clone(),
             platform_specific_info,
             rdma_resource: node_info.rdma_resource.clone(),
+            sriov_resources: node_info.sriov_resources.clone(),
         }
     }
 }
@@ -531,11 +539,12 @@ impl SelfTestOrchestrator {
     }
 
     /// select the best SR-IOV network for RDMA testing based on node pair
+    /// returns the network name and its resource name
     fn select_sriov_network(
         &self,
         networks: &[SriovNetwork],
         _node_pair: &NodePair,
-    ) -> Option<String> {
+    ) -> Option<(String, String)> {
         if networks.is_empty() {
             return None;
         }
@@ -550,8 +559,10 @@ impl SelfTestOrchestrator {
             }
         });
 
-        if let Some(net) = rdma_network {
-            return net.metadata.name.clone();
+        if let Some(net) = rdma_network
+            && let Some(name) = &net.metadata.name
+        {
+            return Some((name.clone(), net.spec.resource_name.clone()));
         }
 
         // fallback: check resource_name field for RDMA-related resources
@@ -561,12 +572,45 @@ impl SelfTestOrchestrator {
             lower.contains("rdma") || lower.contains("roce") || lower.contains("mlnx")
         });
 
-        if let Some(net) = rdma_resource_network {
-            return net.metadata.name.clone();
+        if let Some(net) = rdma_resource_network
+            && let Some(name) = &net.metadata.name
+        {
+            return Some((name.clone(), net.spec.resource_name.clone()));
         }
 
         // last resort: use first available network
-        networks.first().and_then(|net| net.metadata.name.clone())
+        networks.first().and_then(|net| {
+            net.metadata
+                .name
+                .as_ref()
+                .map(|name| (name.clone(), net.spec.resource_name.clone()))
+        })
+    }
+
+    /// find the full namespaced resource name from node's allocatable resources
+    /// matches a short resource name (e.g., "p2rdma") to its full name (e.g., "openshift.io/p2rdma")
+    fn find_full_resource_name(
+        &self,
+        node: &SelectedNode,
+        short_resource_name: &str,
+    ) -> Option<String> {
+        // search through the node's SR-IOV resources for a match
+        for full_name in node.sriov_resources.keys() {
+            // check if the full name ends with the short name
+            // handles cases like:
+            // - "openshift.io/p2rdma" ends with "p2rdma"
+            // - "intel.com/sriov_netdevice" ends with "sriov_netdevice"
+            if full_name.ends_with(short_resource_name)
+                || full_name
+                    .split('/')
+                    .next_back()
+                    .map(|s| s == short_resource_name)
+                    .unwrap_or(false)
+            {
+                return Some(full_name.clone());
+            }
+        }
+        None
     }
 
     /// Setup signal handler for cleanup on CTRL-C
@@ -691,7 +735,9 @@ impl SelfTestOrchestrator {
         tracing::info!("Using RDMA resource type: {}", rdma_resource_type);
 
         // determine UCX config and SR-IOV network based on RDMA type
-        let (ucx_tls, ucx_gid_index, sriov_network) = if rdma_resource_type.contains("roce") {
+        let (ucx_tls, ucx_gid_index, sriov_network, sriov_network_resource) = if rdma_resource_type
+            .contains("roce")
+        {
             // for RoCE on OpenShift, use SR-IOV network attachment
             tracing::info!("Detected RoCE, configuring for OpenShift SR-IOV");
 
@@ -704,6 +750,53 @@ impl SelfTestOrchestrator {
                 .or_else(|| detected.clone())
                 .unwrap_or_else(|| "roce-p2".to_string());
 
+            // try to find the full resource name for this SR-IOV network
+            // (only if prefer_sriov_resources is enabled)
+            let full_resource_name = if self.config.prefer_sriov_resources {
+                if let Ok(sriov_networks) = self.detect_sriov_networks(&self.config.namespace).await
+                {
+                    // find the network that matches our selected network name
+                    sriov_networks
+                        .iter()
+                        .find(|net| net.metadata.name.as_ref() == Some(&network))
+                        .and_then(|net| {
+                            // we have the short resource name (e.g., "p2rdma")
+                            let short_name = &net.spec.resource_name;
+                            tracing::debug!(
+                                "Found SR-IOV network '{}' with resource '{}'",
+                                network,
+                                short_name
+                            );
+
+                            // look up the full resource name from the node
+                            self.find_full_resource_name(
+                                &test_execution.node_pair.node1,
+                                short_name,
+                            )
+                        })
+                } else {
+                    None
+                }
+            } else {
+                tracing::info!(
+                    "SR-IOV resource preference disabled, using generic RDMA resource for maximum performance"
+                );
+                None
+            };
+
+            if let Some(ref full_name) = full_resource_name {
+                tracing::info!(
+                    "Using SR-IOV network '{}' with VF resource '{}' (virtualized)",
+                    network,
+                    full_name
+                );
+            } else if self.config.prefer_sriov_resources {
+                tracing::warn!(
+                    "Could not find SR-IOV VF resource for network '{}', falling back to generic RDMA resource (direct PF access)",
+                    network
+                );
+            }
+
             // for RoCE with SR-IOV, use conservative transport list (rc and tcp only)
             // ud/dc can cause issues with some SR-IOV configurations
             let tls = if self.config.gpu_requirement.requires_gpu() {
@@ -713,7 +806,7 @@ impl SelfTestOrchestrator {
             };
             // use CLI-specified GID index, or let UCX auto-detect
             let gid_index = self.config.ucx_gid_index.clone().unwrap_or_default();
-            (tls, gid_index, Some(network))
+            (tls, gid_index, Some(network), full_resource_name)
         } else {
             // for InfiniBand, let UCX auto-select or specify full list
             tracing::info!("Detected InfiniBand, configuring UCX transports");
@@ -722,12 +815,13 @@ impl SelfTestOrchestrator {
             } else {
                 "rc,ud,dc,tcp".to_string()
             };
-            (tls, "0".to_string(), None)
+            (tls, "0".to_string(), None, None)
         };
 
         workloads::RdmaInfo {
             rdma_resource_type,
             sriov_network,
+            sriov_network_resource,
             ucx_tls,
             ucx_gid_index,
         }
@@ -774,12 +868,12 @@ impl SelfTestOrchestrator {
                 let sriov_networks = self.detect_sriov_networks(&self.config.namespace).await?;
 
                 if !sriov_networks.is_empty() {
-                    if let Some(selected_network) =
+                    if let Some((network_name, _resource_name)) =
                         self.select_sriov_network(&sriov_networks, &node_pair)
                     {
-                        info!("Auto-selected SR-IOV network: {}", selected_network);
+                        info!("Auto-selected SR-IOV network: {}", network_name);
                         let mut detected = self.detected_sriov_network.lock().await;
-                        *detected = Some(selected_network);
+                        *detected = Some(network_name);
                     } else {
                         return Err(anyhow::anyhow!(
                             "No suitable SR-IOV network found for namespace '{}'. \
@@ -858,6 +952,7 @@ impl SelfTestOrchestrator {
             superpods: Vec::new(),
             leafgroups: Vec::new(),
             sriov_networks: Vec::new(),
+            nvidia_network_operator_resources: None,
             nodes: Vec::new(),
             gpu_nodes: 0,
             gpu_types: Vec::new(),
@@ -1349,6 +1444,20 @@ impl SelfTestOrchestrator {
             test_execution.status = TestStatus::TimedOut;
             test_execution.end_time = Some(chrono::Utc::now());
             warn!("Test timed out after {:?}", timeout);
+
+            // cleanup resources on timeout only if cleanup mode is enabled
+            if self.config.cleanup_mode.should_cleanup() {
+                info!("Cleaning up resources after timeout...");
+                if let Err(e) = self.cleanup_test_resources(test_execution).await {
+                    error!("Failed to cleanup resources after timeout: {}", e);
+                } else {
+                    info!("Timeout cleanup completed");
+                }
+            } else {
+                info!(
+                    "Test timed out - resources preserved for debugging (use --cleanup to auto-cleanup)"
+                );
+            }
         }
 
         // wait a bit for final logs to flush
@@ -1626,10 +1735,11 @@ impl Default for SelfTestConfig {
         Self {
             namespace: "default".to_string(),
             workload_source: WorkloadSource::Embedded,
-            cleanup_mode: CleanupMode::Cleanup,
+            cleanup_mode: CleanupMode::NoCleanup,
             execution_mode: ExecutionMode::Execute,
             timeout: Duration::from_secs(300), // 5 minutes
             sriov_network: None,
+            prefer_sriov_resources: true, // default to SR-IOV VF resources
             gpu_requirement: GpuRequirement::Required,
             signal_handling: SignalHandling::CleanupOnSignal,
             workload: None,

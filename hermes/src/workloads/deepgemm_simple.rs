@@ -4,30 +4,26 @@ use std::time::Duration;
 use super::{RdmaInfo, TemplateContext, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
-pub struct DeepEpLowLatencyTest;
+pub struct DeepGemmSimpleTest;
 
-impl TestWorkload for DeepEpLowLatencyTest {
+impl TestWorkload for DeepGemmSimpleTest {
     fn name(&self) -> &str {
-        "deepep-lowlatency-test"
+        "deepgemm-simple-test"
     }
 
     fn description(&self) -> &str {
-        "DeepEP low latency MoE expert parallel test on two nodes"
+        "DeepGEMM simple FP8 GEMM and M-grouped tests on two nodes"
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(240) // 4 minutes
-    }
-
-    fn required_gpus_per_node(&self) -> u32 {
-        1 // internode test requires at least 1 local rank (1 GPU) per node
+        Duration::from_secs(180) // 3 minutes
     }
 
     fn success_criteria(&self) -> Vec<String> {
         vec![
-            "Repository cloned successfully".to_string(),
-            "GPU detection successful".to_string(),
-            "DeepEP low latency test completed".to_string(),
+            "Library import successful".to_string(),
+            "Basic FP8 GEMM test passed".to_string(),
+            "M-grouped FP8 GEMM test passed".to_string(),
         ]
     }
 
@@ -40,13 +36,14 @@ impl TestWorkload for DeepEpLowLatencyTest {
     ) -> Result<String> {
         // build context using the unified template context
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
-            .with_embedded_files("06_deepep_low_latency");
+            .with_embedded_files("03_deepgemm_simple")
+            .with_active_deadline(self.expected_duration());
 
         // render template with configured environment
-        let template_str = include_str!("../../manifests/06_deepep_low_latency/manifest.yaml.j2");
+        let template_str = include_str!("../../../manifests/03_deepgemm_simple/manifest.yaml.j2");
         let mut env = super::create_template_environment();
-        env.add_template("deepep_low_latency", template_str)?;
-        let template = env.get_template("deepep_low_latency")?;
+        env.add_template("deepgemm_simple", template_str)?;
+        let template = env.get_template("deepgemm_simple")?;
         let rendered = template.render(&context)?;
 
         Ok(rendered)

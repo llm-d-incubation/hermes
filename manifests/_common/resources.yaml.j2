@@ -2,14 +2,22 @@
 {%- macro resources(rdma_qty="1", gpu_qty=None, memory_req="2Gi", memory_lim="4Gi", cpu_req="1", cpu_lim="2") %}
         resources:
           requests:
+{%- if sriov_network_resource %}
+            {{ sriov_network_resource }}: "{{ rdma_qty }}"
+{%- else %}
             {{ rdma_resource_type }}: "{{ rdma_qty }}"
+{%- endif %}
 {%- if gpu_qty %}
             nvidia.com/gpu: "{{ gpu_qty }}"
 {%- endif %}
             memory: {{ memory_req }}
             cpu: "{{ cpu_req }}"
           limits:
+{%- if sriov_network_resource %}
+            {{ sriov_network_resource }}: "{{ rdma_qty }}"
+{%- else %}
             {{ rdma_resource_type }}: "{{ rdma_qty }}"
+{%- endif %}
 {%- if gpu_qty %}
             nvidia.com/gpu: "{{ gpu_qty }}"
 {%- endif %}

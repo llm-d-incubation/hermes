@@ -4,26 +4,30 @@ use std::time::Duration;
 use super::{RdmaInfo, TemplateContext, TestWorkload};
 use crate::self_test::{NodePair, SelfTestConfig};
 
-pub struct PplxKernelsTest;
+pub struct DeepEpInternodeTest;
 
-impl TestWorkload for PplxKernelsTest {
+impl TestWorkload for DeepEpInternodeTest {
     fn name(&self) -> &str {
-        "pplx-kernels-test"
+        "deepep-internode-test"
     }
 
     fn description(&self) -> &str {
-        "pplx-kernels all-to-all communication benchmark on two nodes"
+        "DeepEP internode MoE expert parallel test across two nodes with RDMA"
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(300) // 5 minutes
+        Duration::from_secs(1200) // 20 minutes - test involves extensive tuning loops
+    }
+
+    fn required_gpus_per_node(&self) -> u32 {
+        2 // supports 1, 2, 4, or 8 GPUs per node (default to 2 for flexibility)
     }
 
     fn success_criteria(&self) -> Vec<String> {
         vec![
             "Repository cloned successfully".to_string(),
-            "Dependencies installed".to_string(),
-            "All-to-all benchmark completed".to_string(),
+            "GPU detection successful".to_string(),
+            "DeepEP internode test completed".to_string(),
         ]
     }
 
@@ -36,13 +40,14 @@ impl TestWorkload for PplxKernelsTest {
     ) -> Result<String> {
         // build context using the unified template context
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
-            .with_embedded_files("04_pplx_kernels");
+            .with_embedded_files("05_deepep_internode")
+            .with_active_deadline(self.expected_duration());
 
         // render template with configured environment
-        let template_str = include_str!("../../manifests/04_pplx_kernels/manifest.yaml.j2");
+        let template_str = include_str!("../../../manifests/05_deepep_internode/manifest.yaml.j2");
         let mut env = super::create_template_environment();
-        env.add_template("pplx_kernels", template_str)?;
-        let template = env.get_template("pplx_kernels")?;
+        env.add_template("deepep_internode", template_str)?;
+        let template = env.get_template("deepep_internode")?;
         let rendered = template.render(&context)?;
 
         Ok(rendered)

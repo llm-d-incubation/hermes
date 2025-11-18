@@ -1,14 +1,24 @@
-{# SR-IOV network annotations #}
+{# SR-IOV network annotations - only add when using SR-IOV VF resources #}
 {%- macro sriov_annotation_simple() %}
-{%- if sriov_network %}
+{%- if sriov_network and sriov_network_resource %}
       annotations:
         k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
 {%- endif %}
 {%- endmacro %}
 
 {%- macro sriov_annotation_with_interface() %}
-{%- if sriov_network %}
+{%- if sriov_network and sriov_network_resource %}
       annotations:
         k8s.v1.cni.cncf.io/networks: '[{"name": "{{ sriov_network }}", "interface": "{{ sriov_interface }}"}]'
+{%- endif %}
+{%- endmacro %}
+
+{%- macro sriov_annotation_dual_interface() %}
+{%- if sriov_network and sriov_network_resource %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '{{ sriov_network }}, {{ sriov_network }}'
+{%- elif not sriov_network_resource %}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
 {%- endif %}
 {%- endmacro %}

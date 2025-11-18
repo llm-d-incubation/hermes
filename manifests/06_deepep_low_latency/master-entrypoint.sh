@@ -8,18 +8,36 @@ nvidia-smi -L
 GPU_COUNT=$(nvidia-smi -L | wc -l)
 echo "Detected $GPU_COUNT GPUs"
 
-# source and run diagnostics
+# source diagnostics functions
 source /opt/deepep-test/diagnostics.sh
+
+# enumerate all physical NICs first to prove we have access
+enumerate_physical_rdma_nics
+
+# run detailed diagnostics
 print_rdma_diagnostics
 
-# detect and configure RDMA device for nvshmem and NCCL
-RDMA_DEVICE=$(get_sriov_rdma_device)
-if [ -n "$RDMA_DEVICE" ]; then
-  export NVSHMEM_HCA_LIST="$RDMA_DEVICE"
-  export NCCL_IB_HCA="$RDMA_DEVICE"
-  echo "Configured NVSHMEM_HCA_LIST and NCCL_IB_HCA to use RDMA device: $RDMA_DEVICE (interface: ${SRIOV_INTERFACE:-net1})"
+# detect and configure RDMA devices - split between NCCL and NVSHMEM
+detect_dual_rdma_devices
+
+if [ -n "$NET1_RDMA_DEVICE" ] && [ -n "$NET2_RDMA_DEVICE" ]; then
+  # let libraries auto-detect and use all available RDMA devices
+  export NCCL_SOCKET_IFNAME="$NET2_INTERFACE"
+  export NVSHMEM_ENABLE_NIC_PE_MAPPING="1"
+  export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME="$NET1_INTERFACE"
+
+  echo "=== Multi HCA Config ==="
+  echo "  Mode: Auto-detection (libraries choose devices)"
+  echo "  NCCL socket:        $NET2_INTERFACE"
+  echo "  NVSHMEM bootstrap:  $NET1_INTERFACE"
+  if [ -n "$EXCLUDED_RDMA_DEVICES" ]; then
+    echo "  Devices w/o GIDs:   $EXCLUDED_RDMA_DEVICES"
+  fi
+  echo "  Detected usable:    ${ALL_RDMA_DEVICES:-$NET1_RDMA_DEVICE:1,$NET2_RDMA_DEVICE:1}"
+  echo "========================"
 else
-  echo "WARNING: Could not detect RDMA device for SR-IOV interface ${SRIOV_INTERFACE:-net1}, RDMA operations may fail"
+  echo "ERROR: Failed to detect dual RDMA devices, cannot proceed"
+  exit 1
 fi
 
 echo "Cloning DeepEP repository..."

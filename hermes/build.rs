@@ -4,10 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    println!("cargo:rerun-if-changed=manifests/");
+    println!("cargo:rerun-if-changed=../manifests/");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let manifests_root = manifest_dir.join("manifests");
+    let manifests_root = manifest_dir.join("../manifests");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let output_file = out_dir.join("embedded_manifest_files.rs");
 
@@ -281,7 +281,7 @@ fn generate_common_templates_loader(manifests_root: &Path, out_dir: &Path) {
                 let template_name = format!("_common/{}", file_name);
                 // use absolute path from CARGO_MANIFEST_DIR
                 let absolute_path = format!(
-                    "{}/manifests/_common/{}",
+                    "{}/../manifests/_common/{}",
                     env::var("CARGO_MANIFEST_DIR").unwrap(),
                     file_name
                 );

@@ -201,6 +201,9 @@ impl ClusterAnalyzer {
             (None, None)
         };
 
+        // extract SR-IOV resources from allocatable
+        let sriov_resources = Self::extract_sriov_resources(allocatable);
+
         Ok(NodeInfo {
             name,
             rdma_capability,
@@ -225,6 +228,7 @@ impl ClusterAnalyzer {
             cpu_allocated: None, // will be populated later if needed
             memory_allocatable,
             memory_allocated: None, // will be populated later if needed
+            sriov_resources,
             platform_data,
             image_cache_status,
             image_cache_checked_at: if check_image.is_some() {
@@ -234,6 +238,44 @@ impl ClusterAnalyzer {
             },
             topology_rule_error,
         })
+    }
+
+    /// Extract SR-IOV resources from node allocatable resources
+    /// Looks for resources containing 'sriov', 'vf', or 'rdma' in their names,
+    /// or resources under openshift.io/ namespace (excluding standard k8s resources)
+    fn extract_sriov_resources(
+        allocatable: Option<
+            &std::collections::BTreeMap<
+                String,
+                k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+            >,
+        >,
+    ) -> HashMap<String, String> {
+        let mut sriov_resources = HashMap::new();
+
+        if let Some(alloc) = allocatable {
+            for (resource_name, quantity) in alloc {
+                let name_lower = resource_name.to_lowercase();
+
+                // detect SR-IOV resources by multiple patterns:
+                // 1. Contains 'sriov' or 'vf'
+                // 2. Contains 'rdma' (covers openshift.io/p2rdma, etc.)
+                // 3. OpenShift SR-IOV resources (openshift.io/* but exclude common openshift resources)
+                let is_sriov = name_lower.contains("sriov")
+                    || name_lower.contains("vf")
+                    || name_lower.contains("rdma")
+                    || (name_lower.starts_with("openshift.io/")
+                        && !name_lower.contains("hugepages")
+                        && !name_lower.contains("cpu")
+                        && !name_lower.contains("memory"));
+
+                if is_sriov {
+                    sriov_resources.insert(resource_name.clone(), quantity.0.clone());
+                }
+            }
+        }
+
+        sriov_resources
     }
 
     /// Determine cluster-wide topology strategy before analyzing individual nodes
@@ -607,6 +649,27 @@ mod tests {
         assert_eq!(strategy.topology_type, TopologyType::Hardware);
     }
 
+    #[test]
+    fn test_sriov_resource_detection() {
+        // create a mock node with SR-IOV resources
+        let node = create_mock_node_with_sriov();
+        let result =
+            ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None, None).unwrap();
+
+        // verify SR-IOV resources were detected
+        assert!(!result.sriov_resources.is_empty());
+        assert_eq!(
+            result.sriov_resources.get("openshift.io/sriov-vf"),
+            Some(&"8".to_string())
+        );
+        assert_eq!(
+            result
+                .sriov_resources
+                .get("intel.com/intel_sriov_netdevice"),
+            Some(&"4".to_string())
+        );
+    }
+
     // helper functions to create mock nodes for testing
     fn create_mock_gke_node() -> Node {
         use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -654,5 +717,38 @@ mod tests {
 
         node.metadata.annotations = Some(annotations);
         node
+    }
+
+    fn create_mock_node_with_sriov() -> Node {
+        use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+
+        let labels = BTreeMap::new();
+
+        let mut allocatable = BTreeMap::new();
+        allocatable.insert("cpu".to_string(), Quantity("16".to_string()));
+        allocatable.insert("memory".to_string(), Quantity("64Gi".to_string()));
+        // add SR-IOV resources
+        allocatable.insert(
+            "openshift.io/sriov-vf".to_string(),
+            Quantity("8".to_string()),
+        );
+        allocatable.insert(
+            "intel.com/intel_sriov_netdevice".to_string(),
+            Quantity("4".to_string()),
+        );
+
+        Node {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("test-sriov-node".to_string()),
+                labels: Some(labels),
+                annotations: Some(BTreeMap::new()),
+                ..Default::default()
+            },
+            status: Some(k8s_openapi::api::core::v1::NodeStatus {
+                allocatable: Some(allocatable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
 }

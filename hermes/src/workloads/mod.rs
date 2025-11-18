@@ -18,6 +18,7 @@ pub mod pplx_kernels;
 pub struct RdmaInfo {
     pub rdma_resource_type: String,
     pub sriov_network: Option<String>,
+    pub sriov_network_resource: Option<String>, // full k8s resource name (e.g., openshift.io/p2rdma)
     pub ucx_tls: String,
     pub ucx_gid_index: String,
 }
@@ -27,6 +28,7 @@ impl Object for RdmaInfo {
         match key.as_str()? {
             "rdma_resource_type" => Some(Value::from(self.rdma_resource_type.clone())),
             "sriov_network" => Some(Value::from(self.sriov_network.clone())),
+            "sriov_network_resource" => Some(Value::from(self.sriov_network_resource.clone())),
             "ucx_tls" => Some(Value::from(self.ucx_tls.clone())),
             "ucx_gid_index" => Some(Value::from(self.ucx_gid_index.clone())),
             _ => None,
@@ -50,6 +52,7 @@ pub struct TemplateContext {
     pub selection_reason: String,
     pub rdma_resource_type: String,
     pub sriov_network: Option<String>,
+    pub sriov_network_resource: Option<String>,
     pub sriov_interface: String,
     pub ucx_tls: String,
     pub ucx_gid_index: String,
@@ -63,6 +66,8 @@ pub struct TemplateContext {
     pub dry_run: bool,
     /// embedded files from manifest directory (filename -> base64 content)
     pub configmap_files: std::collections::HashMap<String, String>,
+    /// job deadline in seconds (for activeDeadlineSeconds)
+    pub active_deadline_seconds: u64,
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -88,6 +93,7 @@ impl TemplateContext {
             selection_reason: node_pair.selection_reason.clone(),
             rdma_resource_type: rdma_info.rdma_resource_type.clone(),
             sriov_network: rdma_info.sriov_network.clone(),
+            sriov_network_resource: rdma_info.sriov_network_resource.clone(),
             sriov_interface,
             ucx_tls: rdma_info.ucx_tls.clone(),
             ucx_gid_index: rdma_info.ucx_gid_index.clone(),
@@ -99,6 +105,7 @@ impl TemplateContext {
             dry_run: config.execution_mode.is_dry_run(),
             extra_env_vars: std::collections::HashMap::new(),
             configmap_files: std::collections::HashMap::new(),
+            active_deadline_seconds: 300, // default 5 minutes
             extra: std::collections::HashMap::new(),
         }
     }
@@ -140,6 +147,12 @@ impl TemplateContext {
     /// add environment variables
     pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra_env_vars.insert(key.into(), value.into());
+        self
+    }
+
+    /// set active deadline in seconds
+    pub fn with_active_deadline(mut self, deadline: Duration) -> Self {
+        self.active_deadline_seconds = deadline.as_secs();
         self
     }
 }

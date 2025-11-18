@@ -255,6 +255,7 @@ mod tests {
             cpu_allocated: Some("0".to_string()),
             memory_allocatable: Some("128Gi".to_string()),
             memory_allocated: Some("0Gi".to_string()),
+            sriov_resources: HashMap::new(),
             platform_data: crate::models::PlatformSpecificData::Generic,
             image_cache_status: ImageCacheStatus::Unknown,
             image_cache_checked_at: None,

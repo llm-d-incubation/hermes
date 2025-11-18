@@ -11,28 +11,6 @@ run +args="":
         cargo run
     fi
 
-# run snapshot tests against CoreWeave cluster
-test-snapshots-coreweave:
-    KUBECONFIG="${COREWEAVE_KUBECONFIG}" cargo test --test snapshot_tests test_coreweave
-
-# run snapshot tests against OpenShift cluster
-test-snapshots-openshift:
-    cargo test --test snapshot_tests test_openshift
-
-# run all snapshot tests
-test-snapshots: test-snapshots-coreweave test-snapshots-openshift
-
-# update snapshots when intentional changes are made
-update-snapshots-coreweave:
-    KUBECONFIG="${COREWEAVE_KUBECONFIG}" cargo insta test --test snapshot_tests test_coreweave --review
-
-update-snapshots-openshift:
-    cargo insta test --test snapshot_tests test_openshift --review
-
-# review all pending snapshot changes
-review-snapshots:
-    cargo insta review
-
 # run nixl self-test on CoreWeave - dry run only (shows manifests)
 nixl-self-test-dry:
     #!/usr/bin/env bash
@@ -48,6 +26,10 @@ nixl-self-test:
 nixl-self-test-cleanup:
     KUBECONFIG="${COREWEAVE_KUBECONFIG}" kubectl delete jobs,configmaps,services -n default -l app=nixl-transfer-test
 
+# run deepep low-latency test on OpenShift with custom topology rule
+deepep-openshift:
+    HTTPS_PROXY=http://10.2.32.57:3128 cargo run -- self-test --namespace llm-test --workload deepep-lowlatency-test --topology-rule 'string(int(extract(node_name, "r(\\d+)")) / 10)' --gpus-per-node 1 --image ghcr.io/llm-d/llm-d-cuda-dev:latest
+
 # scan CoreWeave cluster with resource usage stats (forces fresh scan)
 scan-coreweave-usage format="table":
     KUBECONFIG="${COREWEAVE_KUBECONFIG}" cargo run -- scan --show-usage --no-cache --format {{format}}
@@ -56,6 +38,18 @@ scan-coreweave-usage format="table":
 gen-crds:
     curl -sSL https://raw.githubusercontent.com/openshift/sriov-network-operator/refs/heads/release-4.22/deployment/sriov-network-operator-chart/crds/sriovnetwork.openshift.io_sriovnetworks.yaml | kopium -Af - > src/crds/sriovnetworks.rs
     curl -sSL https://raw.githubusercontent.com/openshift/sriov-network-operator/refs/heads/release-4.22/deployment/sriov-network-operator-chart/crds/sriovnetwork.openshift.io_sriovnetworknodepolicies.yaml | kopium -Af - > src/crds/sriovnetworknodepolicies.rs
+
+# generate NVIDIA Network Operator CRD from cluster
+gen-nvidia-crd:
+    #!/usr/bin/env bash
+    set -e
+    HTTPS_PROXY=http://10.2.32.57:3128 kubectl get crd nicclusterpolicies.mellanox.com -o yaml > /tmp/nicclusterpolicy-crd.yaml
+    kopium -f /tmp/nicclusterpolicy-crd.yaml --derive Default --derive PartialEq > src/crds/nvidia_network.rs
+    # fix missing Default derives on enums
+    sed -i '' 's/^#\[derive(Serialize, Deserialize, Clone, Debug, PartialEq)\]$$/&#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]/' src/crds/nvidia_network.rs
+    # add #[default] to first enum variant for status enums
+    sed -i '' '/^pub enum NicClusterPolicyStatus.*State {$/,/^}$/ { /    #\[serde(rename/{ N; s/\n/\n    #[default]\n/; } }' src/crds/nvidia_network.rs
+    echo "✅ NVIDIA Network Operator CRD generated at src/crds/nvidia_network.rs"
 
 # bump version (patch, minor, or major) and create release
 bump level="patch":
@@ -102,3 +96,58 @@ tag-release:
     echo "Creating tag ${TAG}..."
     git tag -a "${TAG}" -m "Release ${TAG}"
     echo "✅ Tag ${TAG} created. Push with: git push origin ${TAG}"
+
+# build roce-detector docker image
+build-roce-detector tag="latest":
+    #!/usr/bin/env bash
+    set -e
+
+    # detect container runtime (prefer podman for RHEL compatibility)
+    if command -v podman &> /dev/null; then
+        CONTAINER_CMD="podman"
+    elif command -v docker &> /dev/null; then
+        CONTAINER_CMD="docker"
+    else
+        echo "Error: neither podman nor docker found"
+        exit 1
+    fi
+
+    echo "Building roce-detector with ${CONTAINER_CMD}..."
+    cd roce-detector/roce-detector
+    ${CONTAINER_CMD} build -t quay.io/wseaton/roce-detector:{{tag}} .
+
+    # also tag as latest if a version tag was specified
+    if [ "{{tag}}" != "latest" ]; then
+        ${CONTAINER_CMD} tag quay.io/wseaton/roce-detector:{{tag}} quay.io/wseaton/roce-detector:latest
+    fi
+
+    echo "✅ Image built: quay.io/wseaton/roce-detector:{{tag}}"
+
+# push roce-detector docker image
+push-roce-detector tag="latest":
+    #!/usr/bin/env bash
+    set -e
+
+    # detect container runtime
+    if command -v podman &> /dev/null; then
+        CONTAINER_CMD="podman"
+    elif command -v docker &> /dev/null; then
+        CONTAINER_CMD="docker"
+    else
+        echo "Error: neither podman nor docker found"
+        exit 1
+    fi
+
+    echo "Pushing roce-detector:{{tag}} to quay.io..."
+    ${CONTAINER_CMD} push quay.io/wseaton/roce-detector:{{tag}}
+
+    # if pushing a version tag, also push latest
+    if [ "{{tag}}" != "latest" ]; then
+        echo "Pushing roce-detector:latest to quay.io..."
+        ${CONTAINER_CMD} push quay.io/wseaton/roce-detector:latest
+    fi
+
+    echo "✅ Image pushed: quay.io/wseaton/roce-detector:{{tag}}"
+
+# build and push roce-detector docker image
+build-push-roce-detector tag="latest": (build-roce-detector tag) (push-roce-detector tag)

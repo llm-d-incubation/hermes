@@ -38,10 +38,11 @@ impl TestWorkload for NixlTransferTest {
         // build context with embedded files
         let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
             .with_server_service("nixl-test-target")
-            .with_embedded_files("01_nixl_transfer");
+            .with_embedded_files("01_nixl_transfer")
+            .with_active_deadline(self.expected_duration());
 
         // render template with configured environment
-        let template_str = include_str!("../../manifests/01_nixl_transfer/manifest.yaml.j2");
+        let template_str = include_str!("../../../manifests/01_nixl_transfer/manifest.yaml.j2");
         let mut env = super::create_template_environment();
         env.add_template("nixl", template_str)?;
         let template = env.get_template("nixl")?;
