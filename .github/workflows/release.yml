@@ -40,7 +40,7 @@ jobs:
       - name: Install build dependencies (RHEL)
         if: matrix.container != ''
         run: |
-          dnf install -y gcc make perl-core openssl-devel libibverbs-devel
+          dnf install -y gcc make perl-core openssl-devel libibverbs-devel cmake
 
       - name: Install build dependencies (Ubuntu musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
