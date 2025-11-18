@@ -1,0 +1,1 @@
+A native reimplementation of KServe's "detect roce" entrypoint adapter, found here: https://github.com/red-hat-data-services/kserve/blob/c832f31a0a7c78bb2dbdfa3b6e5783a306abdceb/config/llmisvc/config-llm-template.yaml#L19-L138
