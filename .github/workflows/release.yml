@@ -12,14 +12,17 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
+            container: registry.access.redhat.com/ubi9/ubi:latest
             target: x86_64-unknown-linux-gnu
             artifact_name: hermes
             asset_name: hermes-linux-amd64
           - os: ubuntu-latest
+            container: registry.access.redhat.com/ubi9/ubi:latest
             target: x86_64-unknown-linux-musl
             artifact_name: hermes
             asset_name: hermes-linux-amd64-musl
@@ -35,14 +38,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install build dependencies (RHEL)
+        if: matrix.container != ''
+        run: |
+          dnf install -y gcc make perl-core openssl-devel libibverbs-devel
+          # install musl-gcc for musl target
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            dnf install -y musl-gcc musl-libc-static
+          fi
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -62,18 +70,33 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build hermes
+        run: cargo build --release --target ${{ matrix.target }} -p hermes
 
-      - name: Strip binary
+      - name: Build roce-detector (x86_64 Linux gnu only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo build --release --target ${{ matrix.target }} -p roce-detector
+
+      - name: Strip hermes binary
         if: matrix.os != 'macos-latest'
-        run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        run: strip target/${{ matrix.target }}/release/hermes
 
-      - name: Upload artifact
+      - name: Strip roce-detector binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: strip target/${{ matrix.target }}/release/roce-detector
+
+      - name: Upload hermes artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          path: target/${{ matrix.target }}/release/hermes
+
+      - name: Upload roce-detector artifact
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: roce-detector-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/roce-detector
 
   release:
     name: Create Release
@@ -90,13 +113,21 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          for dir in artifacts/*; do
+
+          # copy hermes binaries
+          for dir in artifacts/hermes-*; do
             if [ -d "$dir" ]; then
               asset_name=$(basename "$dir")
               cp "$dir/hermes" "release/$asset_name"
               chmod +x "release/$asset_name"
             fi
           done
+
+          # copy roce-detector binary (x86_64 Linux gnu only)
+          if [ -d "artifacts/roce-detector-x86_64-unknown-linux-gnu" ]; then
+            cp "artifacts/roce-detector-x86_64-unknown-linux-gnu/roce-detector" "release/roce-detector-linux-amd64"
+            chmod +x "release/roce-detector-linux-amd64"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
