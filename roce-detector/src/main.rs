@@ -44,22 +44,22 @@ enum OutputFormat {
     Quiet,
 }
 
+// struct-of-arrays design for cache-friendly iteration
 #[derive(Debug, Serialize, Deserialize)]
 struct RoceConfig {
-    /// List of active HCA names (e.g., ["mlx5_0", "mlx5_1"])
-    active_hcas: Vec<String>,
-    /// HCAs to use for NCCL (after filtering)
-    nccl_hcas: Vec<String>,
-    /// HCAs with port numbers for UCX/NVSHMEM
-    ucx_hcas: Vec<String>,
-    /// Selected GID index
-    gid_index: Option<u32>,
-    /// GID index counts per index
-    gid_index_counts: HashMap<u32, u32>,
-    /// Per-HCA GID info
-    hca_details: Vec<HcaDetail>,
+    names: Vec<String>,
+    port_states: Vec<String>,
+    has_roce_v2: Vec<bool>,
+    gid_indices: Vec<Option<u32>>,
+    gid_values: Vec<Option<String>>,
+    netdevs: Vec<Option<String>>,
+
+    // filter criteria
+    socket_ifname_filter: Option<Vec<String>>,
+    forced_gid_index: Option<u32>,
 }
 
+// pivot to row format for reporting
 #[derive(Debug, Serialize, Deserialize)]
 struct HcaDetail {
     name: String,
@@ -68,6 +68,93 @@ struct HcaDetail {
     gid_index: Option<u32>,
     gid_value: Option<String>,
     netdev: Option<String>,
+}
+
+impl RoceConfig {
+    fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    fn is_active(&self, idx: usize) -> bool {
+        self.port_states[idx] == "Active" && self.has_roce_v2[idx]
+    }
+
+    // compute active HCA indices
+    fn active_indices(&self) -> Vec<usize> {
+        (0..self.len()).filter(|&i| self.is_active(i)).collect()
+    }
+
+    // compute NCCL HCA names after filtering
+    fn nccl_hcas(&self) -> Vec<String> {
+        let active = self.active_indices();
+
+        let filtered = if let Some(ref filters) = self.socket_ifname_filter {
+            active
+                .into_iter()
+                .filter(|&i| {
+                    self.netdevs[i]
+                        .as_ref()
+                        .map(|netdev| filters.iter().any(|f| f == netdev))
+                        .unwrap_or(false)
+                })
+                .collect()
+        } else {
+            active
+        };
+
+        if filtered.is_empty() && !self.active_indices().is_empty() {
+            warn!("no HCAs matched filter, using all active");
+            self.active_indices()
+                .iter()
+                .map(|&i| self.names[i].clone())
+                .collect()
+        } else {
+            filtered.iter().map(|&i| self.names[i].clone()).collect()
+        }
+    }
+
+    fn active_hcas(&self) -> Vec<String> {
+        self.active_indices()
+            .iter()
+            .map(|&i| self.names[i].clone())
+            .collect()
+    }
+
+    fn ucx_hcas(&self) -> Vec<String> {
+        self.active_hcas()
+            .iter()
+            .map(|h| format!("{}:1", h))
+            .collect()
+    }
+
+    fn gid_index_counts(&self) -> HashMap<u32, u32> {
+        self.active_indices()
+            .iter()
+            .filter_map(|&i| self.gid_indices[i])
+            .fold(HashMap::new(), |mut map, idx| {
+                *map.entry(idx).or_insert(0) += 1;
+                map
+            })
+    }
+
+    fn selected_gid_index(&self) -> Option<u32> {
+        self.forced_gid_index
+            .or_else(|| select_best_gid_index(&self.gid_index_counts()))
+    }
+
+    // pivot to array-of-structs for reporting
+    fn to_details(&self) -> Vec<HcaDetail> {
+        (0..self.len())
+            .map(|i| HcaDetail {
+                name: self.names[i].clone(),
+                port_state: self.port_states[i].clone(),
+                has_roce_v2: self.has_roce_v2[i],
+                gid_index: self.gid_indices[i],
+                gid_value: self.gid_values[i].clone(),
+                netdev: self.netdevs[i].clone(),
+            })
+            .collect()
+    }
 }
 
 fn main() -> Result<()> {
@@ -97,11 +184,17 @@ fn detect_roce_config(args: &Args) -> Result<RoceConfig> {
     let device_list = device::DeviceList::new()
         .context("failed to enumerate RDMA devices - ensure ibverbs is available")?;
 
-    let mut active_hcas = Vec::new();
-    let mut hca_details = Vec::new();
+    // struct-of-arrays storage
+    let mut names = Vec::new();
+    let mut port_states = Vec::new();
+    let mut has_roce_v2 = Vec::new();
+    let mut gid_indices = Vec::new();
+    let mut gid_values = Vec::new();
+    let mut netdevs = Vec::new();
+
     let mut gid_index_counts: HashMap<u32, u32> = HashMap::new();
 
-    // single-pass device enumeration - collect all info at once
+    // enumerate devices
     for device in &device_list {
         let name = device.name();
 
@@ -131,112 +224,53 @@ fn detect_roce_config(args: &Args) -> Result<RoceConfig> {
             .iter()
             .find(|gid| gid.port_num() == 1 && matches!(gid.gid_type(), GidType::RoceV2));
 
-        let has_roce_v2 = roce_v2_gid.is_some();
+        let has_roce = roce_v2_gid.is_some();
         let netdev = roce_v2_gid.and_then(|gid| gid.netdev_name().ok());
 
-        // detect GID index during this pass (avoid re-enumeration)
-        let (gid_index, gid_value) = if is_active && has_roce_v2 {
+        let (gid_index, gid_value) = if is_active && has_roce {
             find_ipv4_gid_index(&gid_entries, &mut gid_index_counts, &name)
         } else {
             (None, None)
         };
 
-        let detail = HcaDetail {
-            name: name.to_string(),
-            port_state: format!("{:?}", port_state),
-            has_roce_v2,
-            gid_index,
-            gid_value,
-            netdev,
-        };
+        names.push(name.to_string());
+        port_states.push(format!("{:?}", port_state));
+        has_roce_v2.push(has_roce);
+        gid_indices.push(gid_index);
+        gid_values.push(gid_value);
+        netdevs.push(netdev);
 
-        if is_active && has_roce_v2 {
+        if is_active && has_roce {
             info!("found active HCA: {}", name);
-            active_hcas.push(name.to_string());
-            hca_details.push(detail);
         } else {
             debug!(
                 "skipping inactive or non-RoCE HCA: {} (state={:?}, roce={})",
-                name, port_state, has_roce_v2
+                name, port_state, has_roce
             );
-            hca_details.push(detail);
         }
     }
 
-    if active_hcas.is_empty() {
+    let socket_ifname_filter = args
+        .socket_ifname
+        .as_ref()
+        .map(|s| s.split(',').map(|f| f.trim().to_string()).collect());
+
+    let config = RoceConfig {
+        names,
+        port_states,
+        has_roce_v2,
+        gid_indices,
+        gid_values,
+        netdevs,
+        socket_ifname_filter,
+        forced_gid_index: args.gid_index,
+    };
+
+    if config.active_indices().is_empty() {
         warn!("no active RoCE HCAs found");
-        return Ok(RoceConfig {
-            active_hcas: vec![],
-            nccl_hcas: vec![],
-            ucx_hcas: vec![],
-            gid_index: None,
-            gid_index_counts: HashMap::new(),
-            hca_details,
-        });
     }
 
-    // filter by NCCL_SOCKET_IFNAME if specified
-    let nccl_hcas = if let Some(ref ifnames) = args.socket_ifname {
-        filter_hcas_by_interface(&active_hcas, ifnames, &hca_details)?
-    } else {
-        active_hcas.clone()
-    };
-
-    // build UCX HCA list with port numbers
-    let ucx_hcas: Vec<String> = active_hcas.iter().map(|h| format!("{}:1", h)).collect();
-
-    // determine best GID index
-    let gid_index = if let Some(forced_gid) = args.gid_index {
-        info!("using forced GID index: {}", forced_gid);
-        Some(forced_gid)
-    } else {
-        select_best_gid_index(&gid_index_counts)
-    };
-
-    Ok(RoceConfig {
-        active_hcas,
-        nccl_hcas,
-        ucx_hcas,
-        gid_index,
-        gid_index_counts,
-        hca_details,
-    })
-}
-
-fn filter_hcas_by_interface(
-    active_hcas: &[String],
-    ifnames: &str,
-    hca_details: &[HcaDetail],
-) -> Result<Vec<String>> {
-    info!("filtering HCAs by interface: {}", ifnames);
-
-    // use HashSet for O(1) lookups instead of Vec contains
-    let target_ifaces: std::collections::HashSet<&str> =
-        ifnames.split(',').map(|s| s.trim()).collect();
-
-    // build HashMap for O(1) HCA detail lookups
-    let detail_map: HashMap<&str, &HcaDetail> =
-        hca_details.iter().map(|d| (d.name.as_str(), d)).collect();
-
-    let mut filtered = Vec::new();
-
-    for hca in active_hcas {
-        if let Some(detail) = detail_map.get(hca.as_str()) {
-            if let Some(ref netdev) = detail.netdev {
-                if target_ifaces.contains(netdev.as_str()) {
-                    info!("HCA {} matches interface {}", hca, netdev);
-                    filtered.push(hca.clone());
-                }
-            }
-        }
-    }
-
-    if filtered.is_empty() {
-        warn!("no HCAs matched NCCL_SOCKET_IFNAME, using all active HCAs");
-        Ok(active_hcas.to_vec())
-    } else {
-        Ok(filtered)
-    }
+    Ok(config)
 }
 
 // find IPv4 GID index for a single HCA during enumeration
@@ -313,19 +347,20 @@ fn print_env_output(config: &RoceConfig) {
     println!("# Generated by roce-detector");
     println!();
 
-    if config.nccl_hcas.is_empty() {
+    let nccl_hcas = config.nccl_hcas();
+    if nccl_hcas.is_empty() {
         println!("# WARNING: No active RoCE HCAs found");
         return;
     }
 
-    let nccl_hcas_str = config.nccl_hcas.join(",");
-    let ucx_hcas_str = config.ucx_hcas.join(",");
+    let nccl_hcas_str = nccl_hcas.join(",");
+    let ucx_hcas_str = config.ucx_hcas().join(",");
 
     println!("export NCCL_IB_HCA=\"={}\"", nccl_hcas_str);
     println!("export NVSHMEM_HCA_LIST=\"{}\"", ucx_hcas_str);
     println!("export UCX_NET_DEVICES=\"{}\"", ucx_hcas_str);
 
-    if let Some(gid_idx) = config.gid_index {
+    if let Some(gid_idx) = config.selected_gid_index() {
         println!();
         println!("export NCCL_IB_GID_INDEX=\"{}\"", gid_idx);
         println!("export NVSHMEM_IB_GID_INDEX=\"{}\"", gid_idx);
@@ -333,28 +368,49 @@ fn print_env_output(config: &RoceConfig) {
     }
 
     println!();
-    println!("# Active HCAs: {}", config.active_hcas.join(", "));
+    println!("# Active HCAs: {}", config.active_hcas().join(", "));
 }
 
 fn print_json_output(config: &RoceConfig) -> Result<()> {
-    let json = serde_json::to_string_pretty(config)?;
+    // pivot to row format for reporting
+    #[derive(Serialize)]
+    struct JsonOutput {
+        active_hcas: Vec<String>,
+        nccl_hcas: Vec<String>,
+        ucx_hcas: Vec<String>,
+        gid_index: Option<u32>,
+        gid_index_counts: HashMap<u32, u32>,
+        hca_details: Vec<HcaDetail>,
+    }
+
+    let output = JsonOutput {
+        active_hcas: config.active_hcas(),
+        nccl_hcas: config.nccl_hcas(),
+        ucx_hcas: config.ucx_hcas(),
+        gid_index: config.selected_gid_index(),
+        gid_index_counts: config.gid_index_counts(),
+        hca_details: config.to_details(),
+    };
+
+    let json = serde_json::to_string_pretty(&output)?;
     println!("{}", json);
     Ok(())
 }
 
 fn print_quiet_output(config: &RoceConfig) {
-    if config.nccl_hcas.is_empty() {
+    let nccl_hcas = config.nccl_hcas();
+    if nccl_hcas.is_empty() {
         return;
     }
 
-    let nccl_hcas_str = config.nccl_hcas.join(",");
-    let ucx_hcas_str = config.ucx_hcas.join(",");
+    let nccl_hcas_str = nccl_hcas.join(",");
+    let ucx_hcas_str = config.ucx_hcas().join(",");
 
     println!("NCCL_IB_HCA=\"={}\"", nccl_hcas_str);
     println!("NVSHMEM_HCA_LIST=\"{}\"", ucx_hcas_str);
     println!("UCX_NET_DEVICES=\"{}\"", ucx_hcas_str);
 
-    if let Some(gid_idx) = config.gid_index {
+    if let Some(gid_idx) = config.selected_gid_index() {
         println!("NCCL_IB_GID_INDEX=\"{}\"", gid_idx);
         println!("NVSHMEM_IB_GID_INDEX=\"{}\"", gid_idx);
         println!("UCX_IB_GID_INDEX=\"{}\"", gid_idx);
