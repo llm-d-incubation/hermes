@@ -14,5 +14,5 @@ CLAUDE.md
 *.cast
 *.gif
 
-# cruft/scratch files
+# temporary/scratch files
 /cruft/

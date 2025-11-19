@@ -1,23 +1,18 @@
+{%- from "_common/labels.yaml.j2" import job_labels, service_labels, pod_labels -%}
+{%- from "_common/pod_metadata_env.yaml.j2" import pod_metadata_env -%}
+{%- from "_common/resources.yaml.j2" import resources -%}
+{%- from "_common/ucx_env.yaml.j2" import ucx_env -%}
+{%- from "_common/sriov.yaml.j2" import sriov_annotation_dual_interface -%}
+{%- from "_common/configmap.yaml.j2" import configmap -%}
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: deepep-internode-script-{{ test_id }}
-  labels:
-    app: deepep-internode-test
-    test-id: "{{ test_id }}"
-binaryData:
-{%- for key, value in configmap_files | items %}
-  {{ key }}: {{ value }}
-{%- endfor %}
+{{- configmap("deepep-internode-script", "deepep-internode-test", configmap_files) }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: deepep-internode-master-{{ test_id }}
   labels:
-    app: deepep-internode-test
-    test-id: "{{ test_id }}"
+{{- service_labels("deepep-internode-test", "master") }}
 spec:
   clusterIP: None
   selector:
@@ -33,20 +28,14 @@ kind: Job
 metadata:
   name: deepep-internode-master-{{ test_id }}
   labels:
-    app: deepep-internode-test
-    role: master
-    test-id: "{{ test_id }}"
+{{- job_labels("deepep-internode-test", "master") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: deepep-internode-test
-        role: master
-        test-id: "{{ test_id }}"
-      {% if sriov_network %}
-      annotations:
-        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
-      {% endif %}
+{{- pod_labels("deepep-internode-test", "master") }}
+{{- sriov_annotation_dual_interface() }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -55,37 +44,19 @@ spec:
       - name: deepep-internode-master
         image: {{ image }}
         command: ["/bin/bash", "/opt/deepep-test/master-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "{{ gpu_count }}"
-            memory: 32Gi
-            cpu: "16"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "{{ gpu_count }}"
-            memory: 64Gi
-            cpu: "32"
+{{- resources(rdma_qty="2", gpu_qty=gpu_count, memory_req="32Gi", memory_lim="64Gi", cpu_req="16", cpu_lim="32") }}
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
         - name: GPU_COUNT
           value: "{{ gpu_count }}"
-        # ucx configuration for rdma
         - name: UCX_TLS
           value: "{{ ucx_tls }}"
         {% if ucx_gid_index -%}
         - name: UCX_IB_GID_INDEX
           value: "{{ ucx_gid_index }}"
         {% endif -%}
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}
         volumeMounts:
         - name: deepep-test-script
           mountPath: /opt/deepep-test
@@ -107,20 +78,14 @@ kind: Job
 metadata:
   name: deepep-internode-worker-{{ test_id }}
   labels:
-    app: deepep-internode-test
-    role: worker
-    test-id: "{{ test_id }}"
+{{- job_labels("deepep-internode-test", "worker") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: deepep-internode-test
-        role: worker
-        test-id: "{{ test_id }}"
-      {% if sriov_network %}
-      annotations:
-        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
-      {% endif %}
+{{- pod_labels("deepep-internode-test", "worker") }}
+{{- sriov_annotation_dual_interface() }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -129,37 +94,19 @@ spec:
       - name: deepep-internode-worker
         image: {{ image }}
         command: ["/bin/bash", "/opt/deepep-test/worker-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "{{ gpu_count }}"
-            memory: 32Gi
-            cpu: "16"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "{{ gpu_count }}"
-            memory: 64Gi
-            cpu: "32"
+{{- resources(rdma_qty="2", gpu_qty=gpu_count, memory_req="32Gi", memory_lim="64Gi", cpu_req="16", cpu_lim="32") }}
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
         - name: GPU_COUNT
           value: "{{ gpu_count }}"
-        # ucx configuration for rdma
         - name: UCX_TLS
           value: "{{ ucx_tls }}"
         {% if ucx_gid_index -%}
         - name: UCX_IB_GID_INDEX
           value: "{{ ucx_gid_index }}"
         {% endif -%}
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}
         volumeMounts:
         - name: deepep-test-script
           mountPath: /opt/deepep-test

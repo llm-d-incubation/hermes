@@ -1,0 +1,26 @@
+{# common volume definitions #}
+{%- macro configmap_volume(name, configmap_name, mount_path) %}
+volumeMounts:
+- name: {{ name }}
+  mountPath: {{ mount_path }}
+  readOnly: true
+{%- endmacro %}
+
+{%- macro configmap_volume_source(name, configmap_name) %}
+      - name: {{ name }}
+        configMap:
+          name: {{ configmap_name }}-{{ test_id }}
+          defaultMode: 493
+{%- endmacro %}
+
+{%- macro dshm_volume(size_gi) %}
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ size_gi }}Gi
+{%- endmacro %}
+
+{%- macro dshm_mount() %}
+        - name: dshm
+          mountPath: /dev/shm
+{%- endmacro %}

@@ -1,11 +1,13 @@
+{%- from "_common/labels.yaml.j2" import job_labels, service_labels, pod_labels -%}
+{%- from "_common/pod_metadata_env.yaml.j2" import pod_metadata_env -%}
+{%- from "_common/resources.yaml.j2" import resources -%}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: pplx-kernels-master-{{ test_id }}
   labels:
-    app: pplx-kernels-test
-    test-id: "{{ test_id }}"
+{{- service_labels("pplx-kernels-test", "master") }}
 spec:
   clusterIP: None
   selector:
@@ -21,16 +23,13 @@ kind: Job
 metadata:
   name: pplx-kernels-master-{{ test_id }}
   labels:
-    app: pplx-kernels-test
-    role: master
-    test-id: "{{ test_id }}"
+{{- job_labels("pplx-kernels-test", "master") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: pplx-kernels-test
-        role: master
-        test-id: "{{ test_id }}"
+{{- pod_labels("pplx-kernels-test", "master") }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -39,44 +38,24 @@ spec:
       - name: pplx-kernels-master
         image: {{ image }}
         command: ["/bin/bash", "/opt/pplx-test/master-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 8Gi
-            cpu: "4"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 16Gi
-            cpu: "8"
+{{- resources(rdma_qty="1", gpu_qty="1", memory_req="8Gi", memory_lim="16Gi", cpu_req="4", cpu_lim="8") }}
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: pplx-kernels-worker-{{ test_id }}
   labels:
-    app: pplx-kernels-test
-    role: worker
-    test-id: "{{ test_id }}"
+{{- job_labels("pplx-kernels-test", "worker") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: pplx-kernels-test
-        role: worker
-        test-id: "{{ test_id }}"
+{{- pod_labels("pplx-kernels-test", "worker") }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -85,25 +64,8 @@ spec:
       - name: pplx-kernels-worker
         image: {{ image }}
         command: ["/bin/bash", "/opt/pplx-test/worker-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 8Gi
-            cpu: "4"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            nvidia.com/gpu: "1"
-            memory: 16Gi
-            cpu: "8"
+{{- resources(rdma_qty="1", gpu_qty="1", memory_req="8Gi", memory_lim="16Gi", cpu_req="4", cpu_lim="8") }}
         env:
         - name: TEST_ID
           value: "{{ test_id }}"
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}

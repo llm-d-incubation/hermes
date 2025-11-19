@@ -1,31 +1,21 @@
+{%- from "_common/labels.yaml.j2" import job_labels, pod_labels -%}
+{%- from "_common/pod_metadata_env.yaml.j2" import pod_metadata_env -%}
+{%- from "_common/configmap.yaml.j2" import configmap -%}
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: deepgemm-simple-test-script-{{ test_id }}
-  labels:
-    app: deepgemm-simple-test
-    test-id: "{{ test_id }}"
-binaryData:
-{%- for key, value in configmap_files | items %}
-  {{ key }}: {{ value }}
-{%- endfor %}
+{{- configmap("deepgemm-simple-test-script", "deepgemm-simple-test", configmap_files) }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: deepgemm-simple-node1-{{ test_id }}
   labels:
-    app: deepgemm-simple-test
-    role: node1
-    test-id: "{{ test_id }}"
+{{- job_labels("deepgemm-simple-test", "node1") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: deepgemm-simple-test
-        role: node1
-        test-id: "{{ test_id }}"
+{{- pod_labels("deepgemm-simple-test", "node1") }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -44,14 +34,7 @@ spec:
             memory: 8Gi
             cpu: "4"
         env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}
         volumeMounts:
         - name: deepgemm-test-script
           mountPath: /opt/deepgemm-test
@@ -67,16 +50,13 @@ kind: Job
 metadata:
   name: deepgemm-simple-node2-{{ test_id }}
   labels:
-    app: deepgemm-simple-test
-    role: node2
-    test-id: "{{ test_id }}"
+{{- job_labels("deepgemm-simple-test", "node2") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: deepgemm-simple-test
-        role: node2
-        test-id: "{{ test_id }}"
+{{- pod_labels("deepgemm-simple-test", "node2") }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -95,14 +75,7 @@ spec:
             memory: 8Gi
             cpu: "4"
         env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
+{{- pod_metadata_env() }}
         volumeMounts:
         - name: deepgemm-test-script
           mountPath: /opt/deepgemm-test

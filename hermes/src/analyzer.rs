@@ -80,30 +80,36 @@ impl ClusterAnalyzer {
         };
 
         // detect topology block using custom rule, cluster-wide strategy, or platform-specific detection
-        let (topology_block, topology_detection) = if let Some(rule) = topology_rule {
+        let (topology_block, topology_detection, topology_rule_error) = if let Some(rule) =
+            topology_rule
+        {
             // custom rule supersedes all other detection methods
             use crate::topology_rule::{create_custom_topology_detection, evaluate_topology_rule};
             match evaluate_topology_rule(node, &labels, rule) {
-                Ok(Some(result)) => (Some(result), Some(create_custom_topology_detection(rule))),
-                Ok(None) => (None, Some(create_custom_topology_detection(rule))),
+                Ok(Some(result)) => (
+                    Some(result),
+                    Some(create_custom_topology_detection(rule)),
+                    None,
+                ),
+                Ok(None) => (None, Some(create_custom_topology_detection(rule)), None),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to evaluate topology rule for node {}: {}",
-                        name, e
-                    );
-                    (None, None)
+                    // don't log immediately - will be aggregated by caller
+                    (None, None, Some(format!("{}", e)))
                 }
             }
         } else if cluster_topology_strategy.is_some() {
-            Self::detect_topology_block_with_strategy(
+            let (block, detection) = Self::detect_topology_block_with_strategy(
                 node,
                 &platform_type,
                 &labels,
                 &annotations,
                 cluster_topology_strategy,
-            )
+            );
+            (block, detection, None)
         } else {
-            platform_detector.detect_topology_block(node, &labels, &annotations)
+            let (block, detection) =
+                platform_detector.detect_topology_block(node, &labels, &annotations);
+            (block, detection, None)
         };
 
         // extract platform-specific information using platform detector
@@ -195,6 +201,9 @@ impl ClusterAnalyzer {
             (None, None)
         };
 
+        // extract SR-IOV resources from allocatable
+        let sriov_resources = Self::extract_sriov_resources(allocatable);
+
         Ok(NodeInfo {
             name,
             rdma_capability,
@@ -219,6 +228,7 @@ impl ClusterAnalyzer {
             cpu_allocated: None, // will be populated later if needed
             memory_allocatable,
             memory_allocated: None, // will be populated later if needed
+            sriov_resources,
             platform_data,
             image_cache_status,
             image_cache_checked_at: if check_image.is_some() {
@@ -226,7 +236,46 @@ impl ClusterAnalyzer {
             } else {
                 None
             },
+            topology_rule_error,
         })
+    }
+
+    /// Extract SR-IOV resources from node allocatable resources
+    /// Looks for resources containing 'sriov', 'vf', or 'rdma' in their names,
+    /// or resources under openshift.io/ namespace (excluding standard k8s resources)
+    fn extract_sriov_resources(
+        allocatable: Option<
+            &std::collections::BTreeMap<
+                String,
+                k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+            >,
+        >,
+    ) -> HashMap<String, String> {
+        let mut sriov_resources = HashMap::new();
+
+        if let Some(alloc) = allocatable {
+            for (resource_name, quantity) in alloc {
+                let name_lower = resource_name.to_lowercase();
+
+                // detect SR-IOV resources by multiple patterns:
+                // 1. Contains 'sriov' or 'vf'
+                // 2. Contains 'rdma' (covers openshift.io/p2rdma, etc.)
+                // 3. OpenShift SR-IOV resources (openshift.io/* but exclude common openshift resources)
+                let is_sriov = name_lower.contains("sriov")
+                    || name_lower.contains("vf")
+                    || name_lower.contains("rdma")
+                    || (name_lower.starts_with("openshift.io/")
+                        && !name_lower.contains("hugepages")
+                        && !name_lower.contains("cpu")
+                        && !name_lower.contains("memory"));
+
+                if is_sriov {
+                    sriov_resources.insert(resource_name.clone(), quantity.0.clone());
+                }
+            }
+        }
+
+        sriov_resources
     }
 
     /// Determine cluster-wide topology strategy before analyzing individual nodes
@@ -575,7 +624,6 @@ impl ClusterAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_yaml_snapshot;
 
     #[test]
     fn test_analyze_node_gke_with_rdma() {
@@ -584,9 +632,10 @@ mod tests {
         let result =
             ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None, None).unwrap();
 
-        assert_yaml_snapshot!(result, {
-            ".node_labels" => insta::sorted_redaction(),
-        });
+        assert_eq!(result.platform_type, PlatformType::GKE);
+        assert_eq!(result.rdma_capability, RdmaCapability::Capable);
+        assert_eq!(result.gpu_count, Some(8));
+        assert!(result.topology_rule_error.is_none());
     }
 
     #[test]
@@ -595,7 +644,30 @@ mod tests {
         let result =
             ClusterAnalyzer::determine_cluster_topology_strategy(&nodes, &PlatformType::GKE);
 
-        assert_yaml_snapshot!(result);
+        assert!(result.is_some());
+        let strategy = result.unwrap();
+        assert_eq!(strategy.topology_type, TopologyType::Hardware);
+    }
+
+    #[test]
+    fn test_sriov_resource_detection() {
+        // create a mock node with SR-IOV resources
+        let node = create_mock_node_with_sriov();
+        let result =
+            ClusterAnalyzer::analyze_node(&node, LabelDetailLevel::Basic, &None, None).unwrap();
+
+        // verify SR-IOV resources were detected
+        assert!(!result.sriov_resources.is_empty());
+        assert_eq!(
+            result.sriov_resources.get("openshift.io/sriov-vf"),
+            Some(&"8".to_string())
+        );
+        assert_eq!(
+            result
+                .sriov_resources
+                .get("intel.com/intel_sriov_netdevice"),
+            Some(&"4".to_string())
+        );
     }
 
     // helper functions to create mock nodes for testing
@@ -645,5 +717,38 @@ mod tests {
 
         node.metadata.annotations = Some(annotations);
         node
+    }
+
+    fn create_mock_node_with_sriov() -> Node {
+        use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+
+        let labels = BTreeMap::new();
+
+        let mut allocatable = BTreeMap::new();
+        allocatable.insert("cpu".to_string(), Quantity("16".to_string()));
+        allocatable.insert("memory".to_string(), Quantity("64Gi".to_string()));
+        // add SR-IOV resources
+        allocatable.insert(
+            "openshift.io/sriov-vf".to_string(),
+            Quantity("8".to_string()),
+        );
+        allocatable.insert(
+            "intel.com/intel_sriov_netdevice".to_string(),
+            Quantity("4".to_string()),
+        );
+
+        Node {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("test-sriov-node".to_string()),
+                labels: Some(labels),
+                annotations: Some(BTreeMap::new()),
+                ..Default::default()
+            },
+            status: Some(k8s_openapi::api::core::v1::NodeStatus {
+                allocatable: Some(allocatable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
 }

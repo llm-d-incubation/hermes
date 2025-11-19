@@ -1,24 +1,19 @@
+{%- from "_common/labels.yaml.j2" import job_labels, service_labels, pod_labels -%}
+{%- from "_common/pod_metadata_env.yaml.j2" import pod_metadata_env -%}
+{%- from "_common/resources.yaml.j2" import resources -%}
+{%- from "_common/ucx_env.yaml.j2" import ucx_env -%}
+{%- from "_common/sriov.yaml.j2" import sriov_annotation_simple -%}
+{%- from "_common/configmap.yaml.j2" import configmap -%}
+{%- from "_common/volumes.yaml.j2" import configmap_volume_source, dshm_volume, dshm_mount -%}
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nixl-test-script-{{ test_id }}
-  labels:
-    app: nixl-transfer-test
-    test-id: "{{ test_id }}"
-binaryData:
-{%- for key, value in configmap_files | items %}
-  {{ key }}: {{ value }}
-{%- endfor %}
+{{- configmap("nixl-test-script", "nixl-transfer-test", configmap_files) }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: nixl-test-target
   labels:
-    app: nixl-transfer-test
-    role: target
-    test-id: "{{ test_id }}"
+{{- service_labels("nixl-transfer-test", "target") }}
 spec:
   clusterIP: None  # headless service
   selector:
@@ -36,20 +31,14 @@ kind: Job
 metadata:
   name: nixl-test-target-{{ test_id }}
   labels:
-    app: nixl-transfer-test
-    role: target
-    test-id: "{{ test_id }}"
+{{- job_labels("nixl-transfer-test", "target") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: nixl-transfer-test
-        role: target
-        test-id: "{{ test_id }}"
-{% if sriov_network %}
-      annotations:
-        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
-{% endif %}
+{{- pod_labels("nixl-transfer-test", "target") }}
+{{- sriov_annotation_simple() }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -58,87 +47,34 @@ spec:
       - name: nixl-target
         image: {{ image }}
         command: ["/bin/bash", "/opt/nixl-test/target-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            {% if request_gpu -%}
-            nvidia.com/gpu: "1"
-            {% endif -%}
-            memory: 2Gi
-            cpu: "1"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            {% if request_gpu -%}
-            nvidia.com/gpu: "1"
-            {% endif -%}
-            memory: 4Gi
-            cpu: "2"
+{{- resources(rdma_qty="1", gpu_qty="1" if request_gpu else None, memory_req="2Gi", memory_lim="4Gi", cpu_req="1", cpu_lim="2") }}
         env:
-        # ucx configuration for rdma
-        - name: UCX_LOG_LEVEL
-          value: "info"
-        - name: UCX_ERROR_SIGNALS
-          value: ""
-        - name: UCX_TLS
-          value: "{{ ucx_tls }}"
-        {% if ucx_gid_index -%}
-        - name: UCX_IB_GID_INDEX
-          value: "{{ ucx_gid_index }}"
-        {% endif -%}
-        {% for key, value in extra_env_vars -%}
-        - name: {{ key }}
-          value: "{{ value }}"
-        {% endfor -%}
-        # pod metadata
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
+{{- ucx_env(log_level="info") }}
+{{- pod_metadata_env() }}
         - name: RDMA_DEVICE
           value: "{{ server_node.rdma_device }}"
         volumeMounts:
         - name: nixl-test-script
           mountPath: /opt/nixl-test
           readOnly: true
-        - name: dshm
-          mountPath: /dev/shm
+{{- dshm_mount() }}
       volumes:
-      - name: nixl-test-script
-        configMap:
-          name: nixl-test-script-{{ test_id }}
-          defaultMode: 493
-      - name: dshm
-        emptyDir:
-          medium: Memory
-          sizeLimit: 4Gi
+{{- configmap_volume_source("nixl-test-script", "nixl-test-script") }}
+{{- dshm_volume(4) }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: nixl-test-initiator-{{ test_id }}
   labels:
-    app: nixl-transfer-test
-    role: initiator
-    test-id: "{{ test_id }}"
+{{- job_labels("nixl-transfer-test", "initiator") }}
 spec:
+  activeDeadlineSeconds: {{ active_deadline_seconds }}
   template:
     metadata:
       labels:
-        app: nixl-transfer-test
-        role: initiator
-        test-id: "{{ test_id }}"
-{% if sriov_network %}
-      annotations:
-        k8s.v1.cni.cncf.io/networks: "{{ sriov_network }}"
-{% endif %}
+{{- pod_labels("nixl-transfer-test", "initiator") }}
+{{- sriov_annotation_simple() }}
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -147,62 +83,21 @@ spec:
       - name: nixl-initiator
         image: {{ image }}
         command: ["/bin/bash", "/opt/nixl-test/initiator-entrypoint.sh"]
-        resources:
-          requests:
-            {{ rdma_resource_type }}: "1"
-            {% if request_gpu -%}
-            nvidia.com/gpu: "1"
-            {% endif -%}
-            memory: 2Gi
-            cpu: "1"
-          limits:
-            {{ rdma_resource_type }}: "1"
-            {% if request_gpu -%}
-            nvidia.com/gpu: "1"
-            {% endif -%}
-            memory: 4Gi
-            cpu: "2"
+{{- resources(rdma_qty="1", gpu_qty="1" if request_gpu else None, memory_req="2Gi", memory_lim="4Gi", cpu_req="1", cpu_lim="2") }}
         env:
-        - name: UCX_LOG_LEVEL
-          value: "debug"
-        - name: UCX_TLS
-          value: "{{ ucx_tls }}"
-        {% if ucx_gid_index -%}
-        - name: UCX_IB_GID_INDEX
-          value: "{{ ucx_gid_index }}"
-        {% endif -%}
-        # target connection info
+{{- ucx_env(log_level="debug") }}
         - name: TARGET_HOST
           value: "{{ server_ip }}"
         - name: TARGET_PORT
           value: "18515"
-        # pod metadata
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
+{{- pod_metadata_env() }}
         - name: RDMA_DEVICE
           value: "{{ client_node.rdma_device }}"
         volumeMounts:
         - name: nixl-test-script
           mountPath: /opt/nixl-test
           readOnly: true
-        - name: dshm
-          mountPath: /dev/shm
+{{- dshm_mount() }}
       volumes:
-      - name: nixl-test-script
-        configMap:
-          name: nixl-test-script-{{ test_id }}
-          defaultMode: 493
-      - name: dshm
-        emptyDir:
-          medium: Memory
-          sizeLimit: 4Gi
+{{- configmap_volume_source("nixl-test-script", "nixl-test-script") }}
+{{- dshm_volume(4) }}

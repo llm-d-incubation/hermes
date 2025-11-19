@@ -8,10 +8,43 @@ nvidia-smi -L
 GPU_COUNT=$(nvidia-smi -L | wc -l)
 echo "Detected $GPU_COUNT GPUs"
 
+# source diagnostics functions
+source /opt/deepep-test/diagnostics.sh
+
+# enumerate all physical NICs first to prove we have access
+enumerate_physical_rdma_nics
+
+# run detailed diagnostics
+print_rdma_diagnostics
+
+# detect and configure RDMA devices - split between NCCL and NVSHMEM
+detect_dual_rdma_devices
+
+if [ -n "$NET1_RDMA_DEVICE" ] && [ -n "$NET2_RDMA_DEVICE" ]; then
+  # let libraries auto-detect and use all available RDMA devices
+  export NCCL_SOCKET_IFNAME="$NET2_INTERFACE"
+  export NVSHMEM_ENABLE_NIC_PE_MAPPING="1"
+  export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME="$NET1_INTERFACE"
+
+  echo "=== Multi HCA Config ==="
+  echo "  Mode: Auto-detection (libraries choose devices)"
+  echo "  NCCL socket:        $NET2_INTERFACE"
+  echo "  NVSHMEM bootstrap:  $NET1_INTERFACE"
+  if [ -n "$EXCLUDED_RDMA_DEVICES" ]; then
+    echo "  Devices w/o GIDs:   $EXCLUDED_RDMA_DEVICES"
+  fi
+  echo "  Detected usable:    ${ALL_RDMA_DEVICES:-$NET1_RDMA_DEVICE:1,$NET2_RDMA_DEVICE:1}"
+  echo "========================"
+else
+  echo "ERROR: Failed to detect dual RDMA devices, cannot proceed"
+  exit 1
+fi
+
 echo "Cloning DeepEP repository..."
 cd /tmp
 git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
 cd DeepEP
+git checkout v1.2.1
 
 TOTAL_GPUS=$((GPU_COUNT * 2))
 echo "Running DeepEP low latency test with $TOTAL_GPUS total GPUs (rank 0-$((GPU_COUNT-1)))"
@@ -23,9 +56,9 @@ export RANK=0
 export PYTHONUNBUFFERED=1
 
 echo "Starting Python test script..."
-echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32"
+echo "Command: python tests/test_low_latency.py --num-processes $GPU_COUNT --num-tokens 128 --hidden 2048 --num-topk 4 --num-experts 32"
 
-python -u tests/test_low_latency.py --num-processes "$GPU_COUNT" --num-tokens 128 --hidden 1024 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
+python -u tests/test_low_latency.py --num-processes "$GPU_COUNT" --num-tokens 128 --hidden 2048 --num-topk 4 --num-experts 32 2>&1 | tee /tmp/test_output.log
 
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 echo "Python test exited with code: $TEST_EXIT_CODE"

@@ -18,12 +18,13 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build
 
-# copy workspace Cargo.toml first (if exists) for better layer caching
-COPY Cargo.toml ./Cargo.toml
-COPY src ./src
+# copy workspace files (need whole workspace due to member dependencies)
+COPY Cargo.toml Cargo.lock ./
+COPY roce-detector ./roce-detector
+COPY hermes ./hermes
 
-# build release binary
-RUN cargo build --release
+# build only roce-detector release binary
+RUN cargo build --release --manifest-path roce-detector/Cargo.toml
 
 # runtime stage: UBI9 with only RDMA runtime libraries
 FROM registry.access.redhat.com/ubi9/ubi:latest
@@ -35,7 +36,7 @@ RUN dnf install -y \
     librdmacm \
     && dnf clean all
 
-# copy compiled binary from builder
+# copy compiled binary from builder (builds to workspace target dir)
 COPY --from=builder /build/target/release/roce-detector /usr/local/bin/roce-detector
 
 # rdma device access typically requires root or privileged container

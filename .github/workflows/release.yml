@@ -9,43 +9,50 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux:
+    name: Build Linux (UBI9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and export binaries
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          target: binaries
+          outputs: type=local,dest=./dist
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload hermes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-linux-amd64
+          path: dist/hermes
+
+      - name: Upload roce-detector artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roce-detector-linux-amd64
+          path: dist/roce-detector
+
+  build-macos:
     name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
+    runs-on: macos-latest
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            container: registry.access.redhat.com/ubi9/ubi:latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: hermes
-            asset_name: hermes-linux-amd64
-          - os: ubuntu-latest
-            container: registry.access.redhat.com/ubi9/ubi:latest
-            target: x86_64-unknown-linux-musl
-            artifact_name: hermes
-            asset_name: hermes-linux-amd64-musl
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: hermes
+          - target: x86_64-apple-darwin
             asset_name: hermes-darwin-amd64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: hermes
+          - target: aarch64-apple-darwin
             asset_name: hermes-darwin-arm64
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install build dependencies (RHEL)
-        if: matrix.container != ''
-        run: |
-          dnf install -y gcc make perl-core openssl-devel libibverbs-devel
-          # install musl-gcc for musl target
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            dnf install -y musl-gcc musl-libc-static
-          fi
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -73,34 +80,15 @@ jobs:
       - name: Build hermes
         run: cargo build --release --target ${{ matrix.target }} -p hermes
 
-      - name: Build roce-detector (x86_64 Linux gnu only)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} -p roce-detector
-
-      - name: Strip hermes binary
-        if: matrix.os != 'macos-latest'
-        run: strip target/${{ matrix.target }}/release/hermes
-
-      - name: Strip roce-detector binary
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: strip target/${{ matrix.target }}/release/roce-detector
-
       - name: Upload hermes artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: target/${{ matrix.target }}/release/hermes
 
-      - name: Upload roce-detector artifact
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/upload-artifact@v4
-        with:
-          name: roce-detector-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/roce-detector
-
   release:
     name: Create Release
-    needs: build
+    needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,9 +111,9 @@ jobs:
             fi
           done
 
-          # copy roce-detector binary (x86_64 Linux gnu only)
-          if [ -d "artifacts/roce-detector-x86_64-unknown-linux-gnu" ]; then
-            cp "artifacts/roce-detector-x86_64-unknown-linux-gnu/roce-detector" "release/roce-detector-linux-amd64"
+          # copy roce-detector binary (Linux only)
+          if [ -d "artifacts/roce-detector-linux-amd64" ]; then
+            cp "artifacts/roce-detector-linux-amd64/roce-detector" "release/roce-detector-linux-amd64"
             chmod +x "release/roce-detector-linux-amd64"
           fi
 

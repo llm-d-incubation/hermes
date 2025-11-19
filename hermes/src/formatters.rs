@@ -413,6 +413,12 @@ impl TableFormatter {
             Cell::new("GPU Type").style_spec("Fb"),
         ]);
 
+        // add SR-IOV column if any node has SR-IOV resources
+        let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
+        if has_sriov {
+            title_cells.push(Cell::new("SR-IOV Resources").style_spec("Fb"));
+        }
+
         // add usage columns if data is available
         let has_usage_data = report
             .nodes
@@ -468,6 +474,22 @@ impl TableFormatter {
             ),
             Cell::new(node.gpu_type.as_deref().unwrap_or("-")),
         ]);
+
+        // add SR-IOV resources if any node has them
+        let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
+        if has_sriov {
+            let sriov_display = if node.sriov_resources.is_empty() {
+                "-".to_string()
+            } else {
+                // format as "resource1: qty1, resource2: qty2"
+                node.sriov_resources
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            row_cells.push(Cell::new(&sriov_display).style_spec("Fc"));
+        }
 
         // add usage columns if data is available
         let has_usage_data = report
@@ -782,6 +804,12 @@ impl ReportFormatter for MarkdownFormatter {
 
             headers.extend(vec!["GPU Count".to_string(), "GPU Type".to_string()]);
 
+            // add SR-IOV column if any node has SR-IOV resources
+            let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
+            if has_sriov {
+                headers.push("SR-IOV Resources".to_string());
+            }
+
             let mut rows = Vec::new();
             for node in &report.nodes {
                 let rdma_status = if node.rdma_capability.is_capable() {
@@ -815,6 +843,20 @@ impl ReportFormatter for MarkdownFormatter {
                         .unwrap_or_else(|| "-".to_string()),
                 );
                 row.push(node.gpu_type.as_deref().unwrap_or("-").to_string());
+
+                // add SR-IOV resources if any node has them
+                if has_sriov {
+                    let sriov_display = if node.sriov_resources.is_empty() {
+                        "-".to_string()
+                    } else {
+                        node.sriov_resources
+                            .iter()
+                            .map(|(k, v)| format!("{}: {}", k, v))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    row.push(sriov_display);
+                }
 
                 rows.push(row);
             }
