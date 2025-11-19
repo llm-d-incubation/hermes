@@ -316,7 +316,7 @@ fn select_best_gid_index(gid_index_counts: &HashMap<u32, u32>) -> Option<u32> {
     // find the most common GID index
     let (mut best_gid_index, max_count) = gid_index_counts
         .iter()
-        .max_by_key(|(_, &count)| count)
+        .max_by_key(|&(_, &count)| count)
         .map(|(&idx, &count)| (idx, count))
         .unwrap_or((0, 0));
 
