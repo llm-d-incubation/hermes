@@ -29,6 +29,8 @@ once_cell = "1.19"
 cel = { version = "0.11", features = ["regex"] }
 regex = "1.10"
 base64 = "0.22"
+roce-detector = { path = "../roce-detector", optional = true }
+strip-ansi-escapes = "0.2"
 
 [build-dependencies]
 base64 = "0.22"

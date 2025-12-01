@@ -1,0 +1,58 @@
+NIXL Transfer Test deployed successfully!
+
+Test Configuration:
+  Test ID: {{ .Values.testId }}
+  Namespace: {{ .Values.namespace }}
+  Platform: {{ .Values.topology.platform }}
+  RDMA Type: {{ .Values.topology.rdmaType }}
+
+Nodes Selected:
+  Target (server):    {{ index .Values.topology.nodes 0 "name" }}
+  Initiator (client): {{ index .Values.topology.nodes 1 "name" }}
+
+Topology:
+  Total Nodes: {{ .Values.topology.summary.totalNodes }}
+  Total GPUs: {{ .Values.topology.summary.totalGpus }}
+  GPUs per Node: {{ .Values.topology.summary.gpusPerNode }}
+  Same Topology Block: {{ .Values.topology.allSameBlock }}
+{{- if .Values.topology.allSameBlock }}
+  (optimal placement for local fabric testing)
+{{- else }}
+  (cross-block testing - may have higher latency)
+{{- end }}
+
+To check test status:
+  # view target logs
+  kubectl logs -n {{ .Values.namespace }} -l app=nixl-transfer-test,role=target,test-id={{ .Values.testId }}
+
+  # view initiator logs
+  kubectl logs -n {{ .Values.namespace }} -l app=nixl-transfer-test,role=initiator,test-id={{ .Values.testId }}
+
+  # check job status
+  kubectl get jobs -n {{ .Values.namespace }} -l app=nixl-transfer-test,test-id={{ .Values.testId }}
+
+To run Helm tests:
+  helm test {{ .Release.Name }} -n {{ .Values.namespace }}
+
+To cleanup:
+  helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+Expected output:
+  - Target pod should start NIXL server and listen on port 18515
+  - Initiator pod should connect and perform RDMA transfer
+  - Look for "Transfer completed" and bandwidth metrics in logs
+  - Successful transfer indicates RDMA connectivity is working
+
+Troubleshooting:
+  # check pod scheduling
+  kubectl get pods -n {{ .Values.namespace }} -l app=nixl-transfer-test,test-id={{ .Values.testId }} -o wide
+
+  # check RDMA device access
+  kubectl exec -n {{ .Values.namespace }} -l role=target -- ls -la /dev/infiniband/
+
+  # view detailed logs with timestamps
+  kubectl logs -n {{ .Values.namespace }} -l role=target --timestamps=true
+  kubectl logs -n {{ .Values.namespace }} -l role=initiator --timestamps=true
+
+  # check UCX configuration
+  kubectl logs -n {{ .Values.namespace }} -l role=target | grep UCX

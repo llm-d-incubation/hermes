@@ -1,0 +1,57 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepgemm-minimal-node2-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepgemm-minimal-test
+    role: node2
+    test-id: "{{ .Values.testId }}"
+spec:
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: deepgemm-minimal-test
+        role: node2
+        test-id: "{{ .Values.testId }}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "{{ (index .Values.topology.nodes 1).name }}"
+      containers:
+      - name: deepgemm-minimal-node2
+        image: {{ .Values.image }}
+        command: ["/bin/bash", "/opt/deepgemm-test/node2-entrypoint.sh"]
+        resources:
+          requests:
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: deepgemm-test-script
+          mountPath: /opt/deepgemm-test
+          readOnly: true
+      volumes:
+      - name: deepgemm-test-script
+        configMap:
+          name: deepgemm-minimal-test-script-{{ .Values.testId }}
+          defaultMode: 0755

@@ -1,8 +1,6 @@
-use anyhow::Result;
 use std::time::Duration;
 
-use super::{RdmaInfo, TemplateContext, TestWorkload};
-use crate::self_test::{NodePair, SelfTestConfig};
+use super::TestWorkload;
 
 pub struct PplxKernelsTest;
 
@@ -16,7 +14,7 @@ impl TestWorkload for PplxKernelsTest {
     }
 
     fn expected_duration(&self) -> Duration {
-        Duration::from_secs(300) // 5 minutes
+        Duration::from_secs(300)
     }
 
     fn success_criteria(&self) -> Vec<String> {
@@ -25,27 +23,5 @@ impl TestWorkload for PplxKernelsTest {
             "Dependencies installed".to_string(),
             "All-to-all benchmark completed".to_string(),
         ]
-    }
-
-    fn render_manifest(
-        &self,
-        test_id: &str,
-        node_pair: &NodePair,
-        config: &SelfTestConfig,
-        rdma_info: &RdmaInfo,
-    ) -> Result<String> {
-        // build context using the unified template context
-        let context = TemplateContext::new(test_id, node_pair, config, rdma_info)
-            .with_embedded_files("04_pplx_kernels")
-            .with_active_deadline(self.expected_duration());
-
-        // render template with configured environment
-        let template_str = include_str!("../../../manifests/04_pplx_kernels/manifest.yaml.j2");
-        let mut env = super::create_template_environment();
-        env.add_template("pplx_kernels", template_str)?;
-        let template = env.get_template("pplx_kernels")?;
-        let rendered = template.render(&context)?;
-
-        Ok(rendered)
     }
 }

@@ -1,0 +1,65 @@
+DeepGEMM Minimal Test deployed successfully!
+
+Test Configuration:
+  Test ID: {{ .Values.testId }}
+  Namespace: {{ .Values.namespace }}
+  Platform: {{ .Values.topology.platform }}
+
+Nodes Selected:
+  Node 1: {{ (index .Values.topology.nodes 0).name }}
+  Node 2: {{ (index .Values.topology.nodes 1).name }}
+
+Topology:
+  Total Nodes: {{ .Values.topology.summary.totalNodes }}
+  Total GPUs: {{ .Values.topology.summary.totalGpus }}
+  GPUs per Node: {{ .Values.topology.summary.gpusPerNode }}
+  Same Topology Block: {{ .Values.topology.allSameBlock }}
+{{- if .Values.topology.allSameBlock }}
+  (optimal placement for local testing)
+{{- else }}
+  (cross-block testing)
+{{- end }}
+
+To check test status:
+  # view node1 logs
+  kubectl logs -n {{ .Values.namespace }} -l app=deepgemm-minimal-test,role=node1,test-id={{ .Values.testId }}
+
+  # view node2 logs
+  kubectl logs -n {{ .Values.namespace }} -l app=deepgemm-minimal-test,role=node2,test-id={{ .Values.testId }}
+
+  # check job status
+  kubectl get jobs -n {{ .Values.namespace }} -l app=deepgemm-minimal-test,test-id={{ .Values.testId }}
+
+To run Helm tests:
+  helm test {{ .Release.Name }} -n {{ .Values.namespace }}
+
+To cleanup:
+  helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+Expected output:
+  - Both pods should run DeepGEMM library availability tests
+  - Tests validate: GPU info, library import, testing module, basic tensor operations
+  - Look for "All availability tests passed!" in logs
+  - Successful completion indicates DeepGEMM is ready for use
+
+Test Details:
+  The minimal test validates:
+  1. GPU and CUDA availability
+  2. DeepGEMM library can be imported
+  3. DeepGEMM testing module is available
+  4. Basic FP8 tensor operations work
+  5. Basic CUDA GEMM operations work
+
+Troubleshooting:
+  # check pod scheduling
+  kubectl get pods -n {{ .Values.namespace }} -l app=deepgemm-minimal-test,test-id={{ .Values.testId }} -o wide
+
+  # check GPU access
+  kubectl exec -n {{ .Values.namespace }} -l role=node1 -- nvidia-smi
+
+  # view detailed logs with timestamps
+  kubectl logs -n {{ .Values.namespace }} -l role=node1 --timestamps=true
+  kubectl logs -n {{ .Values.namespace }} -l role=node2 --timestamps=true
+
+  # check Python environment
+  kubectl exec -n {{ .Values.namespace }} -l role=node1 -- python3 -c "import deep_gemm; print(deep_gemm.__version__)"

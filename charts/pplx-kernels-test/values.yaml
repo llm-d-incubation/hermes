@@ -1,0 +1,105 @@
+# Default values for pplx-kernels-test
+# These will be overridden by hermes select-nodes --format helm-values
+
+# test configuration
+testId: "manual-test"  # unique identifier for this test run
+namespace: default  # kubernetes namespace for test resources
+activeDeadlineSeconds: 300  # maximum time for jobs to complete (5 minutes)
+
+# container image with PPLX kernels, NCCL, PyTorch, and CUDA support
+# this image must include:
+# - pplx-kernels (cloned from https://github.com/perplexityai/pplx-kernels)
+# - PyTorch with NCCL backend
+# - CUDA/GPU drivers
+# - RDMA/UCX libraries
+image: ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd
+
+# resource requests for RDMA and GPU
+resources:
+  # RDMA resource name (platform-specific)
+  # examples: rdma/ib (InfiniBand), rdma/roce_gdr (RoCE), networking.gke.io.networks/rdma-vpc0
+  rdma: rdma/ib
+
+  # GPU resource name (usually nvidia.com/gpu for NVIDIA GPUs)
+  gpu: nvidia.com/gpu
+
+  # resource requests (guaranteed allocation)
+  requests:
+    memory: 8Gi  # minimum memory per pod
+    cpu: "4"  # minimum CPU cores
+
+  # resource limits (maximum allowed)
+  limits:
+    memory: 16Gi  # maximum memory per pod
+    cpu: "8"  # maximum CPU cores
+
+# NCCL and distributed training configuration
+distributed:
+  # PyTorch distributed backend
+  backend: nccl
+
+  # master service port for rendezvous
+  masterPort: 29500
+
+  # NCCL environment variables for performance tuning
+  nccl:
+    # NCCL debug verbosity: VERSION, WARN, INFO, TRACE, ALL
+    debug: INFO
+
+    # NCCL IB (InfiniBand) specific settings
+    # these are automatically set based on RDMA type
+    ibDisable: "0"  # 0 = enable IB, 1 = disable
+    ibGidIndex: "0"  # GID index (0 for IB, 3 for RoCE v2)
+    ibTc: "106"  # traffic class for IB QoS
+
+    # NCCL network interface selection
+    # auto-detected from node, but can be overridden
+    socketIfname: ""  # e.g., "eth0" or "ib0"
+
+    # NCCL performance tuning
+    minNrings: "4"  # minimum number of rings
+    maxNrings: "16"  # maximum number of rings
+    buffsize: "4194304"  # buffer size (4MB default)
+
+# pplx-kernels benchmark configuration
+benchmark:
+  # data parallelism size
+  # total world size should be divisible by dp_size
+  dpSize: 1
+
+  # whether to wait for worker to connect before starting
+  waitForWorker: true
+  workerWaitTimeout: 60  # seconds to wait for worker service discovery
+
+# topology configuration - automatically injected by hermes select-nodes
+# this section describes the cluster topology and selected node pair
+topology:
+  # list of nodes selected for the test (always 2 nodes for this test)
+  nodes:
+    - name: node1  # first node (master/rank 0)
+      gpus: 8  # number of GPUs on this node
+      rank: 0  # node rank (0 = master)
+      topologyBlock: unknown  # platform-specific grouping (e.g., leafgroup, fabric domain, zone)
+    - name: node2  # second node (worker/rank 1)
+      gpus: 8  # number of GPUs on this node
+      rank: 1  # node rank (1 = worker)
+      topologyBlock: unknown  # platform-specific grouping
+
+  # aggregated topology summary
+  summary:
+    totalNodes: 2  # total nodes in test (always 2)
+    totalGpus: 16  # total GPUs across all nodes
+    gpusPerNode: 8  # average GPUs per node
+    worldSize: 16  # total GPU count (WORLD_SIZE for distributed setup)
+
+  # RDMA type detected on these nodes
+  rdmaType: rdma/ib  # examples: rdma/ib, rdma/roce_gdr, networking.gke.io.networks/rdma-vpc0
+
+  # platform detected by hermes
+  # options: CoreWeave, GKE, OpenShift, Generic
+  platform: Generic
+
+  # whether both nodes are in the same topology block
+  # true = optimal placement for local RDMA fabric testing
+  # false = cross-block testing (may have higher latency)
+  allSameBlock: false

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: deepep-internode-master-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepep-internode-test
+    role: master
+    test-id: {{ .Values.testId | quote }}
+spec:
+  clusterIP: None
+  selector:
+    app: deepep-internode-test
+    role: master
+    test-id: {{ .Values.testId | quote }}
+  ports:
+  - port: {{ .Values.deepep.rendezvous.masterPort }}
+    name: dist
+    protocol: TCP

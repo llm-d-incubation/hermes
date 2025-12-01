@@ -260,6 +260,7 @@ mod tests {
             image_cache_status: ImageCacheStatus::Unknown,
             image_cache_checked_at: None,
             topology_rule_error: None,
+            roce_config: None,
         }
     }
 

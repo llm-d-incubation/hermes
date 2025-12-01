@@ -1,0 +1,72 @@
+DeepEP Low-Latency Test deployed successfully!
+
+Test ID: {{ .Values.testId }}
+Namespace: {{ .Values.namespace }}
+Platform: {{ .Values.topology.platform }}
+
+TOPOLOGY CONFIGURATION:
+  Master Node:  {{ index .Values.topology.nodes 0 "name" }} ({{ index .Values.topology.nodes 0 "gpus" }} GPUs, rank 0)
+  Worker Node:  {{ index .Values.topology.nodes 1 "name" }} ({{ index .Values.topology.nodes 1 "gpus" }} GPUs, rank {{ index .Values.topology.nodes 1 "gpus" }})
+  Total GPUs:   {{ .Values.topology.summary.totalGpus }}
+  World Size:   {{ .Values.topology.summary.worldSize }}
+  Same Block:   {{ .Values.topology.allSameBlock }}
+  RDMA Type:    {{ .Values.topology.rdmaType }}
+
+RDMA CONFIGURATION:
+  Mode:         {{ if .Values.sriov.enabled }}SR-IOV{{ else }}InfiniBand{{ end }}
+{{- if .Values.sriov.enabled }}
+  Network:      {{ .Values.sriov.network | default "multi-nic-compute" }}
+  Interface:    {{ .Values.sriov.interface }}
+{{- end }}
+  UCX TLS:      {{ .Values.ucx.transports }}
+  GID Index:    {{ .Values.ucx.gidIndex }}
+
+DEEPEP TEST PARAMETERS:
+  Version:      {{ .Values.deepep.version }}
+  Tokens:       {{ .Values.deepep.numTokens }}
+  Hidden:       {{ .Values.deepep.hidden }}
+  Top-K:        {{ .Values.deepep.numTopk }}
+  Experts:      {{ .Values.deepep.numExperts }}
+
+MONITOR TEST PROGRESS:
+
+  # Check job status
+  kubectl get jobs -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+  # Watch pods
+  kubectl get pods -n {{ .Values.namespace }} -l test-id={{ .Values.testId }} -w
+
+  # View master logs
+  kubectl logs -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }} -f
+
+  # View worker logs
+  kubectl logs -n {{ .Values.namespace }} -l role=worker,test-id={{ .Values.testId }} -f
+
+  # Check both job completions
+  kubectl wait --for=condition=complete --timeout=600s -n {{ .Values.namespace }} job/deepep-lowlatency-master-{{ .Values.testId }}
+  kubectl wait --for=condition=complete --timeout=600s -n {{ .Values.namespace }} job/deepep-lowlatency-worker-{{ .Values.testId }}
+
+TROUBLESHOOTING:
+
+  # Describe master pod
+  kubectl describe pod -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }}
+
+  # Describe worker pod
+  kubectl describe pod -n {{ .Values.namespace }} -l role=worker,test-id={{ .Values.testId }}
+
+  # Check service
+  kubectl get svc -n {{ .Values.namespace }} deepep-lowlatency-master-{{ .Values.testId }}
+
+  # View RDMA diagnostics (from master logs)
+  kubectl logs -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }} | grep -A 50 "RDMA Device Diagnostics"
+
+CLEANUP:
+
+  # Uninstall the chart
+  helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+  # Or delete resources manually
+  kubectl delete jobs,svc,cm -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+For more information about DeepEP, visit:
+  https://github.com/deepseek-ai/DeepEP

@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-job-status
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: bitnami/kubectl:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      set -e
+      echo "Checking DeepGEMM Simple Test job status..."
+
+      # check both jobs exist
+      kubectl get job -n {{ .Values.namespace }} deepgemm-simple-node1-{{ .Values.testId }}
+      kubectl get job -n {{ .Values.namespace }} deepgemm-simple-node2-{{ .Values.testId }}
+
+      # wait for jobs to complete (up to 5 minutes)
+      kubectl wait --for=condition=complete --timeout=300s \
+        -n {{ .Values.namespace }} \
+        job/deepgemm-simple-node1-{{ .Values.testId }}
+
+      kubectl wait --for=condition=complete --timeout=300s \
+        -n {{ .Values.namespace }} \
+        job/deepgemm-simple-node2-{{ .Values.testId }}
+
+      echo "Both DeepGEMM test jobs completed successfully!"
+
+      # show logs
+      echo "Node1 logs:"
+      kubectl logs -n {{ .Values.namespace }} -l role=node1,test-id={{ .Values.testId }}
+
+      echo "Node2 logs:"
+      kubectl logs -n {{ .Values.namespace }} -l role=node2,test-id={{ .Values.testId }}

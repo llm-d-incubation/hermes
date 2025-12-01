@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nixl-test-target-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-transfer-test
+    role: target
+    test-id: {{ .Values.testId | quote }}
+spec:
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: nixl-transfer-test
+        role: target
+        test-id: {{ .Values.testId | quote }}
+      {{- if .Values.sriovNetwork }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ index .Values.topology.nodes 0 "name" | quote }}
+      containers:
+      - name: nixl-target
+        image: {{ .Values.image }}
+        command: ["/bin/bash", "/opt/nixl-test/target-entrypoint.sh"]
+        resources:
+          requests:
+            {{ .Values.resources.rdma }}: "1"
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            {{ .Values.resources.rdma }}: "1"
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        env:
+        - name: UCX_LOG_LEVEL
+          value: {{ .Values.ucx.logLevel | quote }}
+        - name: UCX_ERROR_SIGNALS
+          value: ""
+        - name: UCX_TLS
+          value: {{ .Values.ucx.transports | quote }}
+        - name: UCX_IB_GID_INDEX
+          value: {{ .Values.ucx.gidIndex | quote }}
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: RDMA_DEVICE
+          value: ""
+        volumeMounts:
+        - name: nixl-test-script
+          mountPath: /opt/nixl-test
+          readOnly: true
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: nixl-test-script
+        configMap:
+          name: nixl-test-script-{{ .Values.testId }}
+          defaultMode: 493
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 4Gi

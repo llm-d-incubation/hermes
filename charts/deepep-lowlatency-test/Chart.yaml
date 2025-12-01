@@ -1,0 +1,25 @@
+apiVersion: v2
+name: deepep-lowlatency-test
+description: DeepEP low-latency RoCE/IB communication test for multi-GPU expert parallelism
+type: application
+version: 0.1.0
+appVersion: "1.2.1"
+icon: https://raw.githubusercontent.com/cncf/artwork/master/projects/kubernetes/icon/color/kubernetes-icon-color.svg
+keywords:
+  - rdma
+  - gpu
+  - deepep
+  - infiniband
+  - roce
+  - sriov
+  - low-latency
+  - expert-parallelism
+  - nccl
+  - nvshmem
+  - testing
+sources:
+  - https://github.com/llm-d-incubation/llmd-cluster-wizard
+  - https://github.com/deepseek-ai/DeepEP
+maintainers:
+  - name: llm-d-incubation
+    email: noreply@github.com

@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-connection
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-transfer-test
+    test-id: {{ .Values.testId | quote }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test-connection
+    image: {{ .Values.image }}
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      set -e
+      echo "Testing NIXL transfer test deployment..."
+
+      # check if target job exists and completed
+      echo "Checking target job status..."
+      TARGET_STATUS=$(kubectl get job nixl-test-target-{{ .Values.testId }} -n {{ .Values.namespace }} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "NotFound")
+
+      if [ "$TARGET_STATUS" = "True" ]; then
+        echo "✓ Target job completed successfully"
+      else
+        echo "✗ Target job not completed (status: $TARGET_STATUS)"
+        echo "Target job details:"
+        kubectl describe job nixl-test-target-{{ .Values.testId }} -n {{ .Values.namespace }} || true
+        exit 1
+      fi
+
+      # check if initiator job exists and completed
+      echo "Checking initiator job status..."
+      INITIATOR_STATUS=$(kubectl get job nixl-test-initiator-{{ .Values.testId }} -n {{ .Values.namespace }} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "NotFound")
+
+      if [ "$INITIATOR_STATUS" = "True" ]; then
+        echo "✓ Initiator job completed successfully"
+      else
+        echo "✗ Initiator job not completed (status: $INITIATOR_STATUS)"
+        echo "Initiator job details:"
+        kubectl describe job nixl-test-initiator-{{ .Values.testId }} -n {{ .Values.namespace }} || true
+        exit 1
+      fi
+
+      # check initiator logs for success indicators
+      echo "Checking initiator logs for transfer completion..."
+      INITIATOR_LOGS=$(kubectl logs -n {{ .Values.namespace }} -l app=nixl-transfer-test,role=initiator,test-id={{ .Values.testId }} --tail=50 2>/dev/null || echo "")
+
+      if echo "$INITIATOR_LOGS" | grep -q "completed successfully"; then
+        echo "✓ Transfer completed successfully"
+      else
+        echo "✗ Transfer completion message not found in logs"
+        echo "Recent logs:"
+        echo "$INITIATOR_LOGS"
+        exit 1
+      fi
+
+      # check for bandwidth metrics
+      if echo "$INITIATOR_LOGS" | grep -q "Bandwidth:"; then
+        BANDWIDTH=$(echo "$INITIATOR_LOGS" | grep "Bandwidth:" | tail -1)
+        echo "✓ Bandwidth reported: $BANDWIDTH"
+      else
+        echo "⚠ Warning: Bandwidth metric not found in logs"
+      fi
+
+      echo ""
+      echo "All tests passed! NIXL transfer test deployment is healthy."
+
+    env:
+    - name: KUBECONFIG
+      value: /var/run/secrets/kubernetes.io/serviceaccount/token
+  serviceAccountName: default

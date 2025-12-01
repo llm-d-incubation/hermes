@@ -1,0 +1,19 @@
+apiVersion: v2
+name: deepgemm-minimal-test
+description: Minimal DeepGemm GPU compute test for library availability and basic operations
+type: application
+version: 0.1.0
+appVersion: "1.0"
+icon: https://raw.githubusercontent.com/cncf/artwork/master/projects/kubernetes/icon/color/kubernetes-icon-color.svg
+keywords:
+  - gpu
+  - deepgemm
+  - nvidia
+  - compute
+  - testing
+  - fp8
+sources:
+  - https://github.com/llm-d-incubation/llmd-cluster-wizard
+maintainers:
+  - name: llm-d-incubation
+    email: noreply@github.com

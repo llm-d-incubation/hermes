@@ -1,0 +1,88 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pplx-kernels-worker-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: pplx-kernels-test
+    role: worker
+    test-id: {{ .Values.testId | quote }}
+    {{- if .Values.topology }}
+    platform: {{ .Values.topology.platform }}
+    rdma-type: {{ .Values.topology.rdmaType | replace "/" "-" | quote }}
+    {{- end }}
+spec:
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: pplx-kernels-test
+        role: worker
+        test-id: {{ .Values.testId | quote }}
+    spec:
+      restartPolicy: Never
+      {{- if gt (len .Values.topology.nodes) 1 }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.topology.nodes 1).name | quote }}
+      {{- end }}
+      volumes:
+      - name: scripts
+        configMap:
+          name: pplx-kernels-scripts-{{ .Values.testId }}
+          defaultMode: 0755
+      containers:
+      - name: pplx-kernels-worker
+        image: {{ .Values.image }}
+        command: ["/bin/bash", "/opt/pplx-test/worker-entrypoint.sh"]
+        volumeMounts:
+        - name: scripts
+          mountPath: /opt/pplx-test
+        resources:
+          requests:
+            {{ .Values.resources.rdma }}: "1"
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            {{ .Values.resources.rdma }}: "1"
+            {{ .Values.resources.gpu }}: "1"
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        env:
+        - name: TEST_ID
+          value: {{ .Values.testId | quote }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # NCCL configuration
+        - name: NCCL_DEBUG
+          value: {{ .Values.distributed.nccl.debug | quote }}
+        - name: NCCL_IB_DISABLE
+          value: {{ .Values.distributed.nccl.ibDisable | quote }}
+        - name: NCCL_IB_GID_INDEX
+          value: {{ .Values.distributed.nccl.ibGidIndex | quote }}
+        - name: NCCL_IB_TC
+          value: {{ .Values.distributed.nccl.ibTc | quote }}
+        {{- if .Values.distributed.nccl.socketIfname }}
+        - name: NCCL_SOCKET_IFNAME
+          value: {{ .Values.distributed.nccl.socketIfname | quote }}
+        {{- end }}
+        - name: NCCL_MIN_NRINGS
+          value: {{ .Values.distributed.nccl.minNrings | quote }}
+        - name: NCCL_MAX_NRINGS
+          value: {{ .Values.distributed.nccl.maxNrings | quote }}
+        - name: NCCL_BUFFSIZE
+          value: {{ .Values.distributed.nccl.buffsize | quote }}

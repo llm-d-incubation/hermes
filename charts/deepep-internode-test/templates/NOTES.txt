@@ -1,0 +1,78 @@
+DeepEP Multi-Node Internode Communication Test (Test ID: {{ .Values.testId }})
+===============================================================================
+
+Test Configuration:
+------------------
+Namespace:     {{ .Values.namespace }}
+Nodes:         {{ .Values.topology.summary.totalNodes }}
+GPUs per node: {{ .Values.resources.gpuCount }}
+Total GPUs:    {{ .Values.topology.summary.totalGpus }}
+World Size:    {{ .Values.deepep.worldSize }}
+Platform:      {{ .Values.topology.platform }}
+RDMA Type:     {{ .Values.topology.rdmaType }}
+
+DeepEP Parameters:
+-----------------
+Tokens:        {{ .Values.deepep.numTokens }}
+Hidden:        {{ .Values.deepep.hidden }}
+Top-K:         {{ .Values.deepep.numTopk }}
+Experts:       {{ .Values.deepep.numExperts }}
+
+Node Placement:
+--------------
+{{- range .Values.topology.nodes }}
+  Rank {{ .rank }}: {{ .name }} ({{ .gpus }} GPUs) - {{ if eq (int .rank) 0 }}MASTER{{ else }}WORKER{{ end }}
+{{- end }}
+
+Monitor the test with:
+---------------------
+  # Watch job status
+  kubectl get jobs -n {{ .Values.namespace }} -l test-id={{ .Values.testId }} --watch
+
+  # View master logs
+  kubectl logs -n {{ .Values.namespace }} -l app=deepep-internode-test,role=master,test-id={{ .Values.testId }} -f
+
+  # View worker logs (all workers)
+  kubectl logs -n {{ .Values.namespace }} -l app=deepep-internode-test,role=worker,test-id={{ .Values.testId }} --all-containers -f
+
+  # View specific worker rank logs
+  kubectl logs -n {{ .Values.namespace }} -l app=deepep-internode-test,rank=1,test-id={{ .Values.testId }} -f
+
+Check test results:
+------------------
+  # Check if all jobs succeeded
+  kubectl get jobs -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+  # Get pod status
+  kubectl get pods -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+Cleanup test resources:
+----------------------
+  helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+  # Or manually delete resources:
+  kubectl delete jobs,services,configmaps -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+Troubleshooting:
+---------------
+  # Check RDMA device detection
+  kubectl exec -n {{ .Values.namespace }} -it $(kubectl get pod -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }} -o name | head -1) -- ls -la /sys/class/infiniband/
+
+  # Check network interfaces
+  kubectl exec -n {{ .Values.namespace }} -it $(kubectl get pod -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }} -o name | head -1) -- ip addr
+
+  # Describe pods for scheduling issues
+  kubectl describe pods -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+{{- if .Values.sriov.enabled }}
+
+SR-IOV Network Configuration:
+----------------------------
+  Enabled: true
+  Networks:
+  {{- range .Values.sriov.networks }}
+    - {{ .name }}
+  {{- end }}
+{{- end }}
+
+Test Timeout: {{ .Values.activeDeadlineSeconds }} seconds ({{ div .Values.activeDeadlineSeconds 60 }} minutes)

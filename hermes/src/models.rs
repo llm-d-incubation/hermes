@@ -3,6 +3,142 @@ use minijinja::value::{Object, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// define RoceConfig and HcaDetail types inline to avoid platform-specific dependencies
+// these match the JSON output from roce-detector binary (JsonOutput struct in main.rs)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoceConfig {
+    pub active_hcas: Vec<String>,
+    pub nccl_hcas: Vec<String>,
+    pub ucx_hcas: Vec<String>,
+    pub gid_index: Option<u32>,
+    pub gid_index_counts: HashMap<u32, u32>,
+    pub hca_details: Vec<HcaDetail>,
+
+    // namespace-aware detection (Phase 2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace_configs: Option<Vec<NamespaceRoceConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gid_mismatch_detected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_pods: Option<Vec<String>>,
+}
+
+impl RoceConfig {
+    pub fn active_hcas(&self) -> Vec<String> {
+        self.active_hcas.clone()
+    }
+
+    pub fn to_details(&self) -> Vec<HcaDetail> {
+        self.hca_details.clone()
+    }
+
+    /// check if there are any namespace-specific configurations
+    pub fn has_namespace_configs(&self) -> bool {
+        self.namespace_configs
+            .as_ref()
+            .map(|configs| !configs.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// get all namespace configurations
+    pub fn get_namespace_configs(&self) -> Vec<NamespaceRoceConfig> {
+        self.namespace_configs.clone().unwrap_or_default()
+    }
+
+    /// detect if there are GID index mismatches across namespaces
+    pub fn has_gid_mismatch(&self) -> bool {
+        if let Some(configs) = &self.namespace_configs {
+            let gid_indices: Vec<u32> = configs.iter().filter_map(|c| c.gid_index).collect();
+
+            if gid_indices.len() > 1 {
+                let first = gid_indices[0];
+                return gid_indices.iter().any(|&idx| idx != first);
+            }
+        }
+        false
+    }
+
+    /// get list of pods affected by GID mismatches (if any)
+    pub fn affected_pods(&self) -> Vec<String> {
+        if !self.has_gid_mismatch() {
+            return vec![];
+        }
+
+        self.namespace_configs
+            .as_ref()
+            .map(|configs| {
+                configs
+                    .iter()
+                    .filter(|c| c.namespace_type == NamespaceType::Pod)
+                    .filter_map(|c| c.pod_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// RoCE configuration for a specific network namespace
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceRoceConfig {
+    pub namespace_type: NamespaceType,
+    pub namespace_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub active_hcas: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gid_index: Option<u32>,
+    pub gid_index_counts: HashMap<u32, u32>,
+    pub hca_details: Vec<HcaDetail>,
+}
+
+impl NamespaceRoceConfig {
+    /// get total number of active HCAs in this namespace
+    pub fn active_hca_count(&self) -> usize {
+        self.active_hcas.len()
+    }
+
+    /// check if this namespace has any active HCAs
+    pub fn has_active_hcas(&self) -> bool {
+        !self.active_hcas.is_empty()
+    }
+
+    /// get a display name for this namespace
+    pub fn display_name(&self) -> String {
+        match &self.namespace_type {
+            NamespaceType::Host => "host".to_string(),
+            NamespaceType::Pod => self
+                .pod_name
+                .clone()
+                .unwrap_or_else(|| format!("pod:{}", self.namespace_id)),
+            NamespaceType::NetworkNamespace => {
+                format!("netns:{}", self.namespace_id)
+            }
+        }
+    }
+}
+
+/// Type of network namespace where RoCE detection was performed
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NamespaceType {
+    Host,
+    Pod,
+    NetworkNamespace,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HcaDetail {
+    pub name: String,
+    pub port_state: String,
+    pub has_roce_v2: bool,
+    pub gid_index: Option<u32>,
+    pub gid_value: Option<String>,
+    pub netdev: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PlatformType {
     OpenShift,
@@ -221,6 +357,9 @@ pub struct NodeInfo {
     // topology rule evaluation errors (for aggregated logging)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_rule_error: Option<String>,
+    // roce configuration (only populated with scan-roce command)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roce_config: Option<RoceConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

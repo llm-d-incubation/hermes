@@ -1,0 +1,23 @@
+apiVersion: v2
+name: pplx-kernels-test
+description: PPLX kernels distributed GPU test with NCCL
+type: application
+version: 0.1.0
+appVersion: "1.0"
+icon: https://raw.githubusercontent.com/cncf/artwork/master/projects/kubernetes/icon/color/kubernetes-icon-color.svg
+keywords:
+  - rdma
+  - gpu
+  - nccl
+  - pplx
+  - distributed
+  - infiniband
+  - roce
+  - performance
+  - testing
+sources:
+  - https://github.com/llm-d-incubation/llmd-cluster-wizard
+  - https://github.com/perplexityai/pplx-kernels
+maintainers:
+  - name: llm-d-incubation
+    email: noreply@github.com

@@ -55,7 +55,19 @@ impl ReportFormatter for TableFormatter {
 
         // node details table
         if !report.nodes.is_empty() {
-            output.push_str("\nNode Details:\n");
+            // check if any node has namespace-aware RoCE configs
+            let has_namespace_configs = report.nodes.iter().any(|n| {
+                n.roce_config
+                    .as_ref()
+                    .map(|c| c.has_namespace_configs())
+                    .unwrap_or(false)
+            });
+
+            if has_namespace_configs {
+                output.push_str("\nNode Details with Namespace-Aware RoCE Detection:\n");
+            } else {
+                output.push_str("\nNode Details:\n");
+            }
             let node_table = self.create_node_details_table(report);
             output.push_str(&format!("{}\n", node_table));
         }
@@ -373,16 +385,177 @@ impl TableFormatter {
             "Topology".to_string()
         };
 
-        let title_cells = self.create_node_table_headers(&topology_header, report);
-        let titles_row = Row::new(title_cells);
-        node_table.set_titles(titles_row);
+        // check if any node has namespace-aware RoCE configs
+        let has_namespace_configs = report.nodes.iter().any(|n| {
+            n.roce_config
+                .as_ref()
+                .map(|c| c.has_namespace_configs())
+                .unwrap_or(false)
+        });
 
-        for node in &report.nodes {
-            let row_cells = self.create_node_table_row(node, report);
-            node_table.add_row(Row::new(row_cells));
+        if has_namespace_configs {
+            // use namespace-aware table format
+            node_table.set_titles(Row::new(vec![
+                Cell::new("Node Name").style_spec("Fb"),
+                Cell::new("RDMA").style_spec("Fb"),
+                Cell::new("Namespace").style_spec("Fb"),
+                Cell::new("HCAs").style_spec("Fb"),
+                Cell::new("GID Indices").style_spec("Fb"),
+            ]));
+
+            for node in &report.nodes {
+                self.add_namespace_aware_rows(&mut node_table, node);
+            }
+        } else {
+            // use standard table format
+            let title_cells = self.create_node_table_headers(&topology_header, report);
+            let titles_row = Row::new(title_cells);
+            node_table.set_titles(titles_row);
+
+            for node in &report.nodes {
+                let row_cells = self.create_node_table_row(node, report);
+                node_table.add_row(Row::new(row_cells));
+            }
         }
 
         node_table
+    }
+
+    fn add_namespace_aware_rows(&self, table: &mut Table, node: &NodeInfo) {
+        if let Some(ref roce_config) = node.roce_config {
+            if roce_config.has_namespace_configs() {
+                let namespace_configs = roce_config.get_namespace_configs();
+
+                for (idx, ns_config) in namespace_configs.iter().enumerate() {
+                    let node_name = if idx == 0 { &node.name } else { "" };
+                    let rdma_status = if idx == 0 {
+                        if node.rdma_capability.is_capable() {
+                            "Yes"
+                        } else {
+                            "No"
+                        }
+                    } else {
+                        ""
+                    };
+
+                    let hca_count = ns_config.active_hca_count();
+                    let total_hcas = if idx == 0 {
+                        namespace_configs
+                            .iter()
+                            .map(|c| c.active_hca_count())
+                            .sum::<usize>()
+                    } else {
+                        0
+                    };
+
+                    let hca_display = if idx == 0 && total_hcas > 0 {
+                        format!("{}/{}", hca_count, total_hcas)
+                    } else {
+                        hca_count.to_string()
+                    };
+
+                    let gid_display =
+                        self.format_gid_indices(ns_config, roce_config.has_gid_mismatch());
+
+                    table.add_row(Row::new(vec![
+                        Cell::new(node_name),
+                        Cell::new(rdma_status),
+                        Cell::new(&ns_config.display_name()).style_spec("Fc"),
+                        Cell::new(&hca_display).style_spec("Fy"),
+                        Cell::new(&gid_display),
+                    ]));
+                }
+
+                // add total/summary row if there's a mismatch
+                if roce_config.has_gid_mismatch() {
+                    let total_hcas: usize =
+                        namespace_configs.iter().map(|c| c.active_hca_count()).sum();
+
+                    table.add_row(Row::new(vec![
+                        Cell::new(""),
+                        Cell::new(""),
+                        Cell::new("TOTAL").style_spec("Fb"),
+                        Cell::new(&total_hcas.to_string()).style_spec("FbY"),
+                        Cell::new("MISMATCH ❌").style_spec("FbR"),
+                    ]));
+                }
+            } else {
+                // fallback to simple display if no namespace configs
+                let rdma_status = if node.rdma_capability.is_capable() {
+                    "Yes"
+                } else {
+                    "No"
+                };
+
+                let hca_display = if roce_config.active_hcas.is_empty() {
+                    "None".to_string()
+                } else {
+                    roce_config.active_hcas.join(", ")
+                };
+
+                table.add_row(Row::new(vec![
+                    Cell::new(&node.name),
+                    Cell::new(rdma_status),
+                    Cell::new("-"),
+                    Cell::new(&hca_display).style_spec("Fy"),
+                    Cell::new("-"),
+                ]));
+            }
+        } else {
+            // no RoCE config at all
+            let rdma_status = if node.rdma_capability.is_capable() {
+                "Yes"
+            } else {
+                "No"
+            };
+
+            table.add_row(Row::new(vec![
+                Cell::new(&node.name),
+                Cell::new(rdma_status),
+                Cell::new("-"),
+                Cell::new("-"),
+                Cell::new("-"),
+            ]));
+        }
+    }
+
+    fn format_gid_indices(&self, ns_config: &NamespaceRoceConfig, has_mismatch: bool) -> String {
+        if ns_config.gid_index_counts.is_empty() {
+            return "-".to_string();
+        }
+
+        let mut gid_parts: Vec<String> = ns_config
+            .gid_index_counts
+            .iter()
+            .map(|(idx, count)| {
+                if *count > 1 {
+                    format!("{}({})", idx, count)
+                } else {
+                    idx.to_string()
+                }
+            })
+            .collect();
+
+        gid_parts.sort();
+
+        let base_display = gid_parts.join(", ");
+
+        // add visual indicator
+        if has_mismatch {
+            if ns_config.gid_index_counts.len() > 1 {
+                // multiple GID indices in this namespace itself
+                format!("{} ⚠️", base_display)
+            } else {
+                // single GID but doesn't match other namespaces
+                format!("{} ⚠️", base_display)
+            }
+        } else if ns_config.gid_index_counts.len() == 1 {
+            // consistent single GID
+            format!("{} ✓", base_display)
+        } else {
+            // no mismatch detected but multiple GIDs in namespace
+            base_display
+        }
     }
 
     fn create_node_table_headers(
@@ -417,6 +590,12 @@ impl TableFormatter {
         let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
         if has_sriov {
             title_cells.push(Cell::new("SR-IOV Resources").style_spec("Fb"));
+        }
+
+        // add RoCE column if any node has RoCE config
+        let has_roce = report.nodes.iter().any(|n| n.roce_config.is_some());
+        if has_roce {
+            title_cells.push(Cell::new("RoCE HCAs").style_spec("Fb"));
         }
 
         // add usage columns if data is available
@@ -489,6 +668,22 @@ impl TableFormatter {
                     .join(", ")
             };
             row_cells.push(Cell::new(&sriov_display).style_spec("Fc"));
+        }
+
+        // add RoCE config if any node has it
+        let has_roce = report.nodes.iter().any(|n| n.roce_config.is_some());
+        if has_roce {
+            let roce_display = if let Some(ref config) = node.roce_config {
+                let active_hcas = config.active_hcas();
+                if active_hcas.is_empty() {
+                    "None".to_string()
+                } else {
+                    active_hcas.join(", ")
+                }
+            } else {
+                "-".to_string()
+            };
+            row_cells.push(Cell::new(&roce_display).style_spec("Fy"));
         }
 
         // add usage columns if data is available
@@ -779,89 +974,125 @@ impl ReportFormatter for MarkdownFormatter {
 
         // node details table
         if !report.nodes.is_empty() {
-            output.push_str("## Node Details\n\n");
+            // check if any node has namespace-aware RoCE configs
+            let has_namespace_configs = report.nodes.iter().any(|n| {
+                n.roce_config
+                    .as_ref()
+                    .map(|c| c.has_namespace_configs())
+                    .unwrap_or(false)
+            });
 
-            let topology_header = if let Some(ref detection) = report.topology_detection {
-                format!("Topology ({})", detection.topology_type)
+            if has_namespace_configs {
+                output.push_str("## Node Details with Namespace-Aware RoCE Detection\n\n");
+                output.push_str(&self.format_namespace_aware_nodes(report));
             } else {
-                "Topology".to_string()
-            };
+                output.push_str("## Node Details\n\n");
 
-            // build table header dynamically based on platform
-            let mut headers = vec![
-                "Node Name".to_string(),
-                "RDMA".to_string(),
-                "RDMA Type".to_string(),
-                "Platform".to_string(),
-                topology_header.clone(),
-            ];
-
-            if report.platform_type == PlatformType::CoreWeave {
-                headers.extend(vec!["IB Speed".to_string(), "Fabric".to_string()]);
-            } else if report.platform_type == PlatformType::GKE {
-                headers.push("Node Pool".to_string());
-            }
-
-            headers.extend(vec!["GPU Count".to_string(), "GPU Type".to_string()]);
-
-            // add SR-IOV column if any node has SR-IOV resources
-            let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
-            if has_sriov {
-                headers.push("SR-IOV Resources".to_string());
-            }
-
-            let mut rows = Vec::new();
-            for node in &report.nodes {
-                let rdma_status = if node.rdma_capability.is_capable() {
-                    "Yes"
+                let topology_header = if let Some(ref detection) = report.topology_detection {
+                    format!("Topology ({})", detection.topology_type)
                 } else {
-                    "No"
+                    "Topology".to_string()
                 };
 
-                let mut row = vec![
-                    node.name.clone(),
-                    rdma_status.to_string(),
-                    node.rdma_type.as_deref().unwrap_or("-").to_string(),
-                    node.platform_type.to_string(),
-                    node.topology_block.as_deref().unwrap_or("-").to_string(),
+                // build table header dynamically based on platform
+                let mut headers = vec![
+                    "Node Name".to_string(),
+                    "RDMA".to_string(),
+                    "RDMA Type".to_string(),
+                    "Platform".to_string(),
+                    topology_header.clone(),
                 ];
 
                 if report.platform_type == PlatformType::CoreWeave {
-                    row.push(node.ib_speed.as_deref().unwrap_or("-").to_string());
-                    row.push(node.ib_fabric.as_deref().unwrap_or("-").to_string());
+                    headers.extend(vec!["IB Speed".to_string(), "Fabric".to_string()]);
                 } else if report.platform_type == PlatformType::GKE {
-                    let nodepool = match &node.platform_data {
-                        PlatformSpecificData::Gke(data) => data.nodepool.as_deref().unwrap_or("-"),
-                        _ => "-",
-                    };
-                    row.push(nodepool.to_string());
+                    headers.push("Node Pool".to_string());
                 }
 
-                row.push(
-                    node.gpu_count
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                );
-                row.push(node.gpu_type.as_deref().unwrap_or("-").to_string());
+                headers.extend(vec!["GPU Count".to_string(), "GPU Type".to_string()]);
 
-                // add SR-IOV resources if any node has them
+                // add SR-IOV column if any node has SR-IOV resources
+                let has_sriov = report.nodes.iter().any(|n| !n.sriov_resources.is_empty());
                 if has_sriov {
-                    let sriov_display = if node.sriov_resources.is_empty() {
-                        "-".to_string()
-                    } else {
-                        node.sriov_resources
-                            .iter()
-                            .map(|(k, v)| format!("{}: {}", k, v))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    };
-                    row.push(sriov_display);
+                    headers.push("SR-IOV Resources".to_string());
                 }
 
-                rows.push(row);
-            }
+                // add RoCE column if any node has RoCE config
+                let has_roce = report.nodes.iter().any(|n| n.roce_config.is_some());
+                if has_roce {
+                    headers.push("RoCE HCAs".to_string());
+                }
 
-            output.push_str(&self.format_table(&headers, &rows));
+                let mut rows = Vec::new();
+                for node in &report.nodes {
+                    let rdma_status = if node.rdma_capability.is_capable() {
+                        "Yes"
+                    } else {
+                        "No"
+                    };
+
+                    let mut row = vec![
+                        node.name.clone(),
+                        rdma_status.to_string(),
+                        node.rdma_type.as_deref().unwrap_or("-").to_string(),
+                        node.platform_type.to_string(),
+                        node.topology_block.as_deref().unwrap_or("-").to_string(),
+                    ];
+
+                    if report.platform_type == PlatformType::CoreWeave {
+                        row.push(node.ib_speed.as_deref().unwrap_or("-").to_string());
+                        row.push(node.ib_fabric.as_deref().unwrap_or("-").to_string());
+                    } else if report.platform_type == PlatformType::GKE {
+                        let nodepool = match &node.platform_data {
+                            PlatformSpecificData::Gke(data) => {
+                                data.nodepool.as_deref().unwrap_or("-")
+                            }
+                            _ => "-",
+                        };
+                        row.push(nodepool.to_string());
+                    }
+
+                    row.push(
+                        node.gpu_count
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    );
+                    row.push(node.gpu_type.as_deref().unwrap_or("-").to_string());
+
+                    // add SR-IOV resources if any node has them
+                    if has_sriov {
+                        let sriov_display = if node.sriov_resources.is_empty() {
+                            "-".to_string()
+                        } else {
+                            node.sriov_resources
+                                .iter()
+                                .map(|(k, v)| format!("{}: {}", k, v))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        };
+                        row.push(sriov_display);
+                    }
+
+                    // add RoCE config if any node has it
+                    if has_roce {
+                        let roce_display = if let Some(ref config) = node.roce_config {
+                            let active_hcas = config.active_hcas();
+                            if active_hcas.is_empty() {
+                                "None".to_string()
+                            } else {
+                                active_hcas.join(", ")
+                            }
+                        } else {
+                            "-".to_string()
+                        };
+                        row.push(roce_display);
+                    }
+
+                    rows.push(row);
+                }
+
+                output.push_str(&self.format_table(&headers, &rows));
+            }
         }
 
         Ok(output)
@@ -869,6 +1100,157 @@ impl ReportFormatter for MarkdownFormatter {
 }
 
 impl MarkdownFormatter {
+    fn format_namespace_aware_nodes(&self, report: &ClusterReport) -> String {
+        let headers = vec![
+            "Node Name".to_string(),
+            "RDMA".to_string(),
+            "Namespace".to_string(),
+            "HCAs".to_string(),
+            "GID Indices".to_string(),
+        ];
+
+        let mut rows = Vec::new();
+
+        for node in &report.nodes {
+            if let Some(ref roce_config) = node.roce_config {
+                if roce_config.has_namespace_configs() {
+                    let namespace_configs = roce_config.get_namespace_configs();
+
+                    for (idx, ns_config) in namespace_configs.iter().enumerate() {
+                        let node_name = if idx == 0 {
+                            node.name.clone()
+                        } else {
+                            String::new()
+                        };
+                        let rdma_status = if idx == 0 {
+                            if node.rdma_capability.is_capable() {
+                                "Yes".to_string()
+                            } else {
+                                "No".to_string()
+                            }
+                        } else {
+                            String::new()
+                        };
+
+                        let hca_count = ns_config.active_hca_count();
+                        let total_hcas = if idx == 0 {
+                            namespace_configs
+                                .iter()
+                                .map(|c| c.active_hca_count())
+                                .sum::<usize>()
+                        } else {
+                            0
+                        };
+
+                        let hca_display = if idx == 0 && total_hcas > 0 {
+                            format!("{}/{}", hca_count, total_hcas)
+                        } else {
+                            hca_count.to_string()
+                        };
+
+                        let gid_display = self
+                            .format_gid_indices_markdown(ns_config, roce_config.has_gid_mismatch());
+
+                        rows.push(vec![
+                            node_name,
+                            rdma_status,
+                            ns_config.display_name(),
+                            hca_display,
+                            gid_display,
+                        ]);
+                    }
+
+                    // add total/summary row if there's a mismatch
+                    if roce_config.has_gid_mismatch() {
+                        let total_hcas: usize =
+                            namespace_configs.iter().map(|c| c.active_hca_count()).sum();
+
+                        rows.push(vec![
+                            String::new(),
+                            String::new(),
+                            "**TOTAL**".to_string(),
+                            format!("**{}**", total_hcas),
+                            "**MISMATCH ❌**".to_string(),
+                        ]);
+                    }
+                } else {
+                    // fallback to simple display
+                    let rdma_status = if node.rdma_capability.is_capable() {
+                        "Yes"
+                    } else {
+                        "No"
+                    };
+
+                    let hca_display = if roce_config.active_hcas.is_empty() {
+                        "None".to_string()
+                    } else {
+                        roce_config.active_hcas.join(", ")
+                    };
+
+                    rows.push(vec![
+                        node.name.clone(),
+                        rdma_status.to_string(),
+                        "-".to_string(),
+                        hca_display,
+                        "-".to_string(),
+                    ]);
+                }
+            } else {
+                // no RoCE config
+                let rdma_status = if node.rdma_capability.is_capable() {
+                    "Yes"
+                } else {
+                    "No"
+                };
+
+                rows.push(vec![
+                    node.name.clone(),
+                    rdma_status.to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                ]);
+            }
+        }
+
+        self.format_table(&headers, &rows)
+    }
+
+    fn format_gid_indices_markdown(
+        &self,
+        ns_config: &NamespaceRoceConfig,
+        has_mismatch: bool,
+    ) -> String {
+        if ns_config.gid_index_counts.is_empty() {
+            return "-".to_string();
+        }
+
+        let mut gid_parts: Vec<String> = ns_config
+            .gid_index_counts
+            .iter()
+            .map(|(idx, count)| {
+                if *count > 1 {
+                    format!("{}({})", idx, count)
+                } else {
+                    idx.to_string()
+                }
+            })
+            .collect();
+
+        gid_parts.sort();
+
+        let base_display = gid_parts.join(", ");
+
+        // add visual indicator
+        if has_mismatch {
+            format!("{} ⚠️", base_display)
+        } else if ns_config.gid_index_counts.len() == 1 {
+            format!("{} ✓", base_display)
+        } else {
+            base_display
+        }
+    }
+
     // helper function to format markdown tables with proper alignment
     fn format_table(&self, headers: &[String], rows: &[Vec<String>]) -> String {
         if headers.is_empty() {

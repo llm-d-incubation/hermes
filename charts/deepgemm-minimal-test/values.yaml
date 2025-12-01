@@ -1,0 +1,62 @@
+# Default values for deepgemm-minimal-test
+# These will be overridden by hermes select-nodes --format helm-values
+
+# test configuration
+testId: "manual-test"  # unique identifier for this test run
+namespace: default  # kubernetes namespace for test resources
+activeDeadlineSeconds: 180  # maximum time for jobs to complete (3 minutes)
+
+# container image with DeepGemm, PyTorch, and CUDA support
+# this image must include:
+# - DeepGemm library (NVIDIA deep_gemm)
+# - PyTorch with FP8 support
+# - CUDA/GPU drivers
+image: ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd
+
+# resource requests for GPU compute
+resources:
+  # GPU resource name (usually nvidia.com/gpu for NVIDIA GPUs)
+  gpu: nvidia.com/gpu
+
+  # resource requests (guaranteed allocation)
+  requests:
+    memory: 4Gi  # minimum memory
+    cpu: "2"  # minimum CPU cores
+
+  # resource limits (maximum allowed)
+  limits:
+    memory: 8Gi  # maximum memory
+    cpu: "4"  # maximum CPU cores
+
+# topology configuration - automatically injected by hermes select-nodes
+# this section describes the cluster topology and selected node pair
+topology:
+  # list of nodes selected for the test (2 nodes for multi-node test)
+  nodes:
+    - name: node1  # first node
+      gpus: 8  # number of GPUs on this node
+      rank: 0  # rank in the test (0 = first node)
+      topologyBlock: unknown  # platform-specific grouping (e.g., leafgroup, fabric domain, zone)
+    - name: node2  # second node
+      gpus: 8  # number of GPUs on this node
+      rank: 1  # rank in the test (1 = second node)
+      topologyBlock: unknown  # platform-specific grouping
+
+  # aggregated topology summary
+  summary:
+    totalNodes: 2  # total nodes in test
+    totalGpus: 16  # total GPUs across all nodes
+    gpusPerNode: 8  # average GPUs per node
+    worldSize: 16  # total GPU count (used for distributed training context)
+
+  # RDMA type detected on these nodes (if applicable)
+  rdmaType: ""  # examples: rdma/ib, rdma/roce_gdr (may be empty for compute-only tests)
+
+  # platform detected by hermes
+  # options: CoreWeave, GKE, OpenShift, Generic
+  platform: Generic
+
+  # whether both nodes are in the same topology block
+  # true = optimal placement for local testing
+  # false = cross-block testing
+  allSameBlock: false

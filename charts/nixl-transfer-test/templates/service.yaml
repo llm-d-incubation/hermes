@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nixl-test-target
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-transfer-test
+    role: target
+    test-id: {{ .Values.testId | quote }}
+spec:
+  clusterIP: None
+  selector:
+    app: nixl-transfer-test
+    role: target
+    test-id: {{ .Values.testId | quote }}
+  ports:
+  - name: nixl-transfer
+    port: 18515
+    targetPort: 18515
+    protocol: TCP

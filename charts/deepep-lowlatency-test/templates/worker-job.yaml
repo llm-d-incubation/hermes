@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deepep-lowlatency-worker-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepep-lowlatency-test
+    role: worker
+    test-id: {{ .Values.testId | quote }}
+spec:
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: deepep-lowlatency-test
+        role: worker
+        test-id: {{ .Values.testId | quote }}
+{{- if .Values.sriov.enabled }}
+{{- if .Values.sriov.network }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '{{ .Values.sriov.network }}, {{ .Values.sriov.network }}'
+{{- else }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+{{- end }}
+{{- end }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
+      containers:
+      - name: deepep-lowlatency-worker
+        image: {{ .Values.image }}
+        command: ["/bin/bash", "/opt/deepep-test/worker-entrypoint.sh"]
+        resources:
+          requests:
+            {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+            {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 1 "gpus" | quote }}
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+            {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 1 "gpus" | quote }}
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        env:
+        - name: TEST_ID
+          value: {{ .Values.testId | quote }}
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: UCX_LOG_LEVEL
+          value: {{ .Values.ucx.logLevel | quote }}
+        - name: UCX_ERROR_SIGNALS
+          value: ""
+        - name: UCX_TLS
+          value: {{ .Values.ucx.transports | quote }}
+{{- if .Values.ucx.gidIndex }}
+        - name: UCX_IB_GID_INDEX
+          value: {{ .Values.ucx.gidIndex | quote }}
+{{- end }}
+{{- if .Values.sriov.enabled }}
+        - name: SRIOV_INTERFACE
+          value: {{ .Values.sriov.interface | quote }}
+{{- end }}
+        - name: NCCL_SOCKET_IFNAME
+          value: {{ .Values.sriov.interface | default "eth0" | quote }}
+        - name: NCCL_DEBUG
+          value: {{ .Values.nccl.debug | quote }}
+        volumeMounts:
+        - name: deepep-test-script
+          mountPath: /opt/deepep-test
+          readOnly: true
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: deepep-test-script
+        configMap:
+          name: deepep-lowlatency-script-{{ .Values.testId }}
+          defaultMode: 493
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
