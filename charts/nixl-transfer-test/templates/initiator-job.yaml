@@ -21,26 +21,42 @@ spec:
       {{- end }}
     spec:
       restartPolicy: Never
+      {{- if .Values.hostIPC }}
+      hostIPC: true
+      serviceAccountName: nixl-test-{{ .Values.testId }}
+      {{- end }}
       nodeSelector:
         kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
       containers:
       - name: nixl-initiator
         image: {{ .Values.image }}
         command: ["/bin/bash", "/opt/nixl-test/initiator-entrypoint.sh"]
+        {{- if .Values.hostIPC }}
+        securityContext:
+          privileged: true
+        {{- end }}
         resources:
           requests:
+            {{- if .Values.resources.rdma }}
             {{ .Values.resources.rdma }}: "1"
-            {{ .Values.resources.gpu }}: "1"
+            {{- end }}
+            {{- if .Values.resources.gpu }}
+            {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+            {{- end }}
             memory: {{ .Values.resources.requests.memory }}
             cpu: {{ .Values.resources.requests.cpu | quote }}
           limits:
+            {{- if .Values.resources.rdma }}
             {{ .Values.resources.rdma }}: "1"
-            {{ .Values.resources.gpu }}: "1"
+            {{- end }}
+            {{- if .Values.resources.gpu }}
+            {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+            {{- end }}
             memory: {{ .Values.resources.limits.memory }}
             cpu: {{ .Values.resources.limits.cpu | quote }}
         env:
         - name: UCX_LOG_LEVEL
-          value: "debug"
+          value: {{ .Values.ucx.logLevel | quote }}
         - name: UCX_ERROR_SIGNALS
           value: ""
         - name: UCX_TLS
