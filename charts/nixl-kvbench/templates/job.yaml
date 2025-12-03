@@ -1,11 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pplx-kernels-master-{{ .Values.testId }}
+  name: nixl-kvbench-{{ .Values.testId }}
   namespace: {{ .Values.namespace }}
   labels:
-    app: pplx-kernels-test
-    role: master
+    app: nixl-kvbench
     test-id: {{ .Values.testId | quote }}
     {{- if .Values.topology }}
     platform: {{ .Values.topology.platform }}
@@ -13,16 +12,16 @@ metadata:
     {{- end }}
 spec:
   activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  backoffLimit: 0
   template:
     metadata:
       labels:
-        app: pplx-kernels-test
-        role: master
+        app: nixl-kvbench
         test-id: {{ .Values.testId | quote }}
       {{- if .Values.sriov }}
       {{- if .Values.sriov.enabled }}
       annotations:
-        k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+        k8s.v1.cni.cncf.io/networks: {{ .Values.sriov.network | quote }}
       {{- end }}
       {{- end }}
     spec:
@@ -40,15 +39,21 @@ spec:
       volumes:
       - name: scripts
         configMap:
-          name: pplx-kernels-scripts-{{ .Values.testId }}
+          name: nixl-kvbench-{{ .Values.testId }}
           defaultMode: 0755
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
       containers:
-      - name: pplx-kernels-master
+      - name: kvbench
         image: {{ .Values.image }}
-        command: ["/bin/bash", "/opt/pplx-test/master-entrypoint.sh"]
+        command: ["/bin/bash", "/opt/kvbench/entrypoint.sh"]
         volumeMounts:
         - name: scripts
-          mountPath: /opt/pplx-test
+          mountPath: /opt/kvbench
+        - name: shm
+          mountPath: /dev/shm
         resources:
           requests:
             {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
@@ -71,30 +76,18 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
         - name: POD_IP
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
-        # NCCL configuration
-        - name: NCCL_DEBUG
-          value: {{ .Values.distributed.nccl.debug | quote }}
-        - name: NCCL_IB_DISABLE
-          value: {{ .Values.distributed.nccl.ibDisable | quote }}
-        - name: NCCL_IB_GID_INDEX
-          value: {{ .Values.distributed.nccl.ibGidIndex | quote }}
-        - name: NCCL_IB_TC
-          value: {{ .Values.distributed.nccl.ibTc | quote }}
-        {{- if .Values.distributed.nccl.socketIfname }}
-        - name: NCCL_SOCKET_IFNAME
-          value: {{ .Values.distributed.nccl.socketIfname | quote }}
+        # UCX configuration
+        - name: UCX_LOG_LEVEL
+          value: {{ .Values.ucx.logLevel | quote }}
+        - name: UCX_TLS
+          value: {{ .Values.ucx.transports | quote }}
+        - name: UCX_IB_GID_INDEX
+          value: {{ .Values.ucx.gidIndex | quote }}
+        {{- if .Values.etcd.enabled }}
+        - name: ETCD_ENDPOINTS
+          value: {{ .Values.etcd.endpoint | quote }}
         {{- end }}
-        - name: NCCL_MIN_NRINGS
-          value: {{ .Values.distributed.nccl.minNrings | quote }}
-        - name: NCCL_MAX_NRINGS
-          value: {{ .Values.distributed.nccl.maxNrings | quote }}
-        - name: NCCL_BUFFSIZE
-          value: {{ .Values.distributed.nccl.buffsize | quote }}

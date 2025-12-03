@@ -1,0 +1,112 @@
+# NIXL KVBench configuration
+# Benchmarking utility for testing KVCache transfers in LLMs
+
+testId: "kvbench"
+namespace: default
+activeDeadlineSeconds: 600
+
+# container image with NIXL, UCX, CUDA, PyTorch, and nixlbench binary
+image: quay.io/praveingk/nixl:llmdw1
+imagePullSecrets: []
+# - name: quay-pull-secret
+
+# nixl repository configuration
+nixl:
+  repo: https://github.com/ai-dynamo/nixl.git
+  ref: main  # branch, tag, or commit
+
+# kvbench command configuration
+benchmark:
+  # command: plan, profile, kvcache, ct-perftest, sequential-ct-perftest
+  command: plan
+
+  # backend: UCX, GDS, POSIX
+  backend: UCX
+
+  # source: gpu, host
+  source: gpu
+
+  # additional arguments passed to main.py
+  extraArgs: ""
+
+# model architecture configuration
+# supported models: llama3.1, deepseek_r1
+model:
+  name: "llama3.1"
+  numLayers: 80
+  # for llama3.1:
+  numQueryHeadsWithMha: 64
+  queryHeadDimension: 128
+  gqaNumQueriesInGroup: 8
+  # for deepseek_r1 (MLA models):
+  # numQueryHeads: 128
+  # embeddingDimension: 7168
+  # ropeMlaDimension: 64
+  # mlaLatentVectorDimension: 512
+  numModelParams: 70000000000
+
+# model runtime configuration
+modelConfig:
+  strategy:
+    tpSize: 1
+    ppSize: 8
+    modelQuantMode: "fp8"
+    kvcacheQuantMode: "fp8"
+  runtime:
+    isl: 1000  # input sequence length
+    osl: 100   # output sequence length
+    numRequests: 10
+  system:
+    hardware: "H100"
+    backend: "VLLM"
+    accessPattern: "block"  # block or layer
+    pageSize: 16
+
+# etcd for multi-node coordination
+etcd:
+  enabled: false
+  # external etcd endpoint (if not deploying our own)
+  endpoint: ""
+  # deploy etcd as part of this chart
+  deploy: false
+  image: quay.io/coreos/etcd:v3.5.9
+
+# resource configuration
+resources:
+  rdma: rdma/ib
+  rdmaQuantity: "1"
+  gpu: nvidia.com/gpu
+  gpuCount: 1
+  requests:
+    memory: 8Gi
+    cpu: "4"
+  limits:
+    memory: 16Gi
+    cpu: "8"
+
+# UCX configuration
+ucx:
+  logLevel: info
+  transports: rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy
+  gidIndex: "0"
+
+# SR-IOV configuration (for RoCE)
+sriov:
+  enabled: false
+  network: ""  # e.g., multi-nic-compute
+
+# topology configuration (for multi-node)
+topology:
+  nodes:
+    - name: node1
+      gpus: 8
+      rank: 0
+      topologyBlock: unknown
+  summary:
+    totalNodes: 1
+    totalGpus: 8
+    gpusPerNode: 8
+    worldSize: 8
+  rdmaType: rdma/ib
+  platform: Generic
+  allSameBlock: true

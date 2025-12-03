@@ -21,6 +21,12 @@ spec:
       {{- end }}
     spec:
       restartPolicy: Never
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range .Values.imagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
       {{- if .Values.hostIPC }}
       hostIPC: true
       serviceAccountName: nixl-test-{{ .Values.testId }}

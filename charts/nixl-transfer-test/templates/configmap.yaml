@@ -16,7 +16,7 @@ data:
     which python3
     python3 --version
     echo "Checking installed packages:"
-    uv pip list | grep -i nixl || echo "Warning: NIXL not found in pip list"
+    pip list 2>/dev/null | grep -i nixl || echo "Warning: NIXL not found in pip list"
     echo "NIXL module contents:"
     python3 -c "import nixl; print([x for x in dir(nixl) if not x.startswith('_')])" || echo "Error: Cannot inspect nixl"
 
@@ -26,16 +26,8 @@ data:
     echo "RDMA devices:"
     ls -la /dev/infiniband/ || echo "No infiniband devices found"
 
-    echo "Checking IPC/SHM capabilities:"
-    ls -la /dev/shm/ || echo "No /dev/shm"
-    df -h | grep -E "(shm|tmp)" || echo "No shm mounts"
-    echo ""
-    echo "Container capabilities:"
-    capsh --print || echo "capsh not available"
-    echo ""
-
     echo "Starting NIXL target script..."
-    /opt/vllm/bin/python3 -u /opt/nixl-test/nixl-transfer-test.py target 0.0.0.0 18515 2>&1 || echo "Python script failed with exit code: $?"
+    {{ .Values.pythonPath | default "python3" }} -u /opt/nixl-test/nixl-transfer-test.py target 0.0.0.0 18515 2>&1 || echo "Python script failed with exit code: $?"
 
   initiator-entrypoint.sh: |-
     #!/bin/bash
@@ -45,7 +37,7 @@ data:
     which python3
     python3 --version
     echo "Checking installed packages:"
-    uv pip list | grep -i nixl || echo "Warning: NIXL not found in pip list"
+    pip list 2>/dev/null | grep -i nixl || echo "Warning: NIXL not found in pip list"
     echo "NIXL module contents:"
     python3 -c "import nixl; print([x for x in dir(nixl) if not x.startswith('_')])" || echo "Error: Cannot inspect nixl"
 
@@ -59,12 +51,12 @@ data:
     sleep 20
 
     echo "Starting NIXL initiator script..."
-    /opt/vllm/bin/python3 -u /opt/nixl-test/nixl-transfer-test.py initiator "${TARGET_HOST}" "${TARGET_PORT}" 2>&1 || echo "Python script failed with exit code: $?"
+    {{ .Values.pythonPath | default "python3" }} -u /opt/nixl-test/nixl-transfer-test.py initiator "${TARGET_HOST}" "${TARGET_PORT}" 2>&1 || echo "Python script failed with exit code: $?"
 
     echo "NIXL transfer test completed"
 
   nixl-transfer-test.py: |-
-    #!/opt/vllm/bin/python3
+    #!/usr/bin/env python3
     """
     NIXL two-node GPU data transfer test
     Based on: https://github.com/ai-dynamo/nixl/blob/main/examples/python/blocking_send_recv_example.py

@@ -1,0 +1,158 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nixl-kvbench-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-kvbench
+    test-id: {{ .Values.testId | quote }}
+data:
+  model.yaml: |
+    model_name: {{ .Values.model.name | quote }}
+    num_layers: {{ .Values.model.numLayers }}
+    {{- if .Values.model.numQueryHeadsWithMha }}
+    num_query_heads_with_mha: {{ .Values.model.numQueryHeadsWithMha }}
+    {{- end }}
+    {{- if .Values.model.numQueryHeads }}
+    num_query_heads: {{ .Values.model.numQueryHeads }}
+    {{- end }}
+    query_head_dimension: {{ .Values.model.queryHeadDimension }}
+    {{- if .Values.model.gqaNumQueriesInGroup }}
+    gqa_num_queries_in_group: {{ .Values.model.gqaNumQueriesInGroup }}
+    {{- end }}
+    {{- if .Values.model.embeddingDimension }}
+    embedding_dimension: {{ .Values.model.embeddingDimension }}
+    {{- end }}
+    {{- if .Values.model.ropeMlaDimension }}
+    rope_mla_dimension: {{ .Values.model.ropeMlaDimension }}
+    {{- end }}
+    {{- if .Values.model.mlaLatentVectorDimension }}
+    mla_latent_vector_dimension: {{ .Values.model.mlaLatentVectorDimension }}
+    {{- end }}
+    num_model_params: {{ .Values.model.numModelParams }}
+
+  model_config.yaml: |
+    strategy:
+      tp_size: {{ .Values.modelConfig.strategy.tpSize }}
+      pp_size: {{ .Values.modelConfig.strategy.ppSize }}
+      model_quant_mode: {{ .Values.modelConfig.strategy.modelQuantMode | quote }}
+      kvcache_quant_mode: {{ .Values.modelConfig.strategy.kvcacheQuantMode | quote }}
+    runtime:
+      isl: {{ .Values.modelConfig.runtime.isl }}
+      osl: {{ .Values.modelConfig.runtime.osl }}
+      num_requests: {{ .Values.modelConfig.runtime.numRequests }}
+    system:
+      hardware: {{ .Values.modelConfig.system.hardware | quote }}
+      backend: {{ .Values.modelConfig.system.backend | quote }}
+      access_pattern: {{ .Values.modelConfig.system.accessPattern | quote }}
+      page_size: {{ .Values.modelConfig.system.pageSize }}
+
+  nixl_shim.py: |
+    #!/usr/bin/env python3
+    """Apply nixl shim for RHAIIS image and run kvbench"""
+    import sys
+    import os
+
+    # apply nixl shim for RHAIIS image (nixl installed as nixl_cu12)
+    try:
+        import nixl
+    except ImportError:
+        try:
+            import nixl_cu12
+            sys.modules['nixl'] = nixl_cu12
+            print("Applied nixl shim - nixl_cu12 -> nixl")
+        except ImportError:
+            print("ERROR - nixl not found")
+            sys.exit(1)
+
+    # run the actual command
+    if __name__ == '__main__':
+        # change to kvbench directory and add to path
+        kvbench_dir = '/tmp/nixl/benchmark/kvbench'
+        os.chdir(kvbench_dir)
+        sys.path.insert(0, kvbench_dir)
+
+        # run main.py with remaining args
+        import runpy
+        sys.argv = ['main.py'] + sys.argv[1:]
+        runpy.run_path('main.py', run_name='__main__')
+
+  entrypoint.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "=== NIXL KVBench ==="
+    echo "Test ID: {{ .Values.testId }}"
+    echo ""
+
+    echo "GPU Info:"
+    nvidia-smi -L
+    echo ""
+
+    # use existing nixl installation if available
+    {{- if .Values.pythonPath }}
+    export PATH=$(dirname {{ .Values.pythonPath }}):$PATH
+    PYTHON={{ .Values.pythonPath }}
+    {{- else }}
+    PYTHON=python3
+    {{- end }}
+
+    echo "Python: $PYTHON"
+    $PYTHON --version
+    echo ""
+
+    # check nixl is available
+    echo "Checking nixl installation..."
+    $PYTHON -c "exec('try:\\n    import nixl\\n    print(\"nixl found\")\\nexcept ImportError:\\n    import nixl_cu12\\n    print(\"nixl_cu12 found\")')"
+
+    echo ""
+    echo "Cloning NIXL repository (for kvbench scripts only)..."
+    cd /tmp
+    git clone --depth 1 --branch {{ .Values.nixl.ref }} {{ .Values.nixl.repo }} nixl
+    cd nixl/benchmark/kvbench
+
+    # install only kvbench dependencies to a temp location
+    echo ""
+    echo "Installing kvbench dependencies..."
+    PYLIB=/tmp/pylocal
+    mkdir -p $PYLIB
+    $PYTHON -m pip install --target=$PYLIB --no-cache-dir click pyyaml tabulate tqdm numpy
+    export PYTHONPATH=$PYLIB:$PYTHONPATH
+
+    echo ""
+    echo "Copying model configs..."
+    cp /opt/kvbench/model.yaml ./model.yaml
+    cp /opt/kvbench/model_config.yaml ./model_config.yaml
+
+    echo ""
+    echo "Model configuration:"
+    cat ./model.yaml
+    echo ""
+    echo "Model runtime configuration:"
+    cat ./model_config.yaml
+    echo ""
+
+    # set up environment
+    export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    {{- if .Values.etcd.enabled }}
+    export ETCD_ENDPOINTS="{{ .Values.etcd.endpoint }}"
+    {{- end }}
+
+    # UCX environment
+    export UCX_LOG_LEVEL={{ .Values.ucx.logLevel }}
+    export UCX_TLS={{ .Values.ucx.transports }}
+    export UCX_IB_GID_INDEX={{ .Values.ucx.gidIndex }}
+
+    echo "Running kvbench {{ .Values.benchmark.command }}..."
+    echo ""
+
+    # run via shim wrapper
+    $PYTHON /opt/kvbench/nixl_shim.py {{ .Values.benchmark.command }} \
+      --model ./model.yaml \
+      --model_config ./model_config.yaml \
+      --backend {{ .Values.benchmark.backend }} \
+      --source {{ .Values.benchmark.source }} \
+      {{ .Values.benchmark.extraArgs }}
+
+    echo ""
+    echo "=== KVBench Complete ==="

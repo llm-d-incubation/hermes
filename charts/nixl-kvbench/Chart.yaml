@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nixl-kvbench
+description: NIXL KVBench - Benchmarking utility for testing KVCache transfers in LLMs
+type: application
+version: 0.1.0
+appVersion: "0.2.0"

@@ -26,6 +26,12 @@ spec:
 {{- end }}
     spec:
       restartPolicy: Never
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range .Values.imagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
       nodeSelector:
         kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
       containers:
