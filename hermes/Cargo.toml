@@ -1,6 +1,6 @@
 [package]
 name = "hermes"
-version = "0.2.6-rc.2"
+version = "0.3.0-rc.1"
 edition.workspace = true
 
 [dependencies]
