@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{Api, Client, api::ListParams};
 use minijinja::value::{Object, Value};
@@ -736,19 +736,42 @@ impl SelfTestOrchestrator {
         Ok(())
     }
 
-    /// get chart path for a workload
+    /// get chart path for a workload (extracts embedded chart to temp dir if needed)
     fn get_chart_path(workload_name: &str) -> Result<PathBuf> {
-        let chart_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Could not find workspace root"))?
+        use crate::embedded_files::get_chart_files;
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+
+        // use a persistent cache dir for extracted charts
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("hermes")
             .join("charts")
             .join(workload_name);
 
-        if !chart_dir.join("Chart.yaml").exists() {
-            bail!("Chart not found: {}", chart_dir.display());
+        // if chart already extracted and valid, use it
+        if cache_dir.join("Chart.yaml").exists() {
+            return Ok(cache_dir);
         }
 
-        Ok(chart_dir)
+        // extract embedded chart
+        let chart_files = get_chart_files(workload_name)
+            .ok_or_else(|| anyhow::anyhow!("Chart not found: {}", workload_name))?;
+
+        // create chart directory
+        std::fs::create_dir_all(&cache_dir)?;
+
+        for (rel_path, b64_content) in chart_files {
+            let file_path = cache_dir.join(rel_path);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let content = BASE64
+                .decode(b64_content)
+                .map_err(|e| anyhow::anyhow!("Failed to decode chart file {}: {}", rel_path, e))?;
+            std::fs::write(&file_path, content)?;
+        }
+
+        Ok(cache_dir)
     }
 
     /// convert SelectedNode back to minimal NodeInfo for TestValues
