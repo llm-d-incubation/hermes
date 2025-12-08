@@ -5,6 +5,12 @@
 testId: "manual-test"  # unique identifier for this test run
 namespace: default  # kubernetes namespace for test resources
 activeDeadlineSeconds: 600  # maximum time for jobs to complete (10 minutes)
+ttlSecondsAfterFinished: 300  # auto-cleanup JobSet after completion (5 minutes)
+
+# exclusive placement for topology-aware scheduling (optional)
+# when set, JobSet ensures each job gets exclusive access to its topology domain
+# exclusivePlacement:
+#   topologyKey: kubernetes.io/hostname  # or topology.kubernetes.io/zone, etc.
 
 # container image with DeepEP, NCCL, NVSHMEM, UCX, and CUDA support
 # this image must include:

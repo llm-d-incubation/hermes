@@ -44,7 +44,9 @@ data:
     git checkout {{ .Values.deepep.version | default "v1.2.1" }}
 
     echo "Running DeepEP internode test with $GPU_COUNT processes per node, $WORLD_SIZE nodes total..."
-    export MASTER_ADDR=deepep-internode-master-${TEST_ID}
+    # use JobSet DNS for master pod discovery
+    # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+    export MASTER_ADDR=deepep-internode-${TEST_ID}-master-0-0.deepep-internode-${TEST_ID}
     export MASTER_PORT={{ .Values.deepep.rendezvous.masterPort }}
     export RANK=0
     export PYTHONUNBUFFERED=1
@@ -116,15 +118,15 @@ data:
     cd DeepEP
     git checkout {{ .Values.deepep.version | default "v1.2.1" }}
 
-    echo "Waiting for master to be ready..."
-    until getent hosts "deepep-internode-master-${TEST_ID}"; do
-      echo "Waiting for master service..."
-      sleep 2
-    done
+    # JobSet's dependsOn ensures master is Ready before worker starts
+    # add small delay for master to fully initialize torchrun rendezvous
+    echo "Waiting for master to fully initialize torchrun rendezvous..."
     sleep 5
 
     echo "Running DeepEP internode test with $GPU_COUNT processes per node, $WORLD_SIZE nodes total..."
-    export MASTER_ADDR=deepep-internode-master-${TEST_ID}
+    # use JobSet DNS for master pod discovery
+    # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+    export MASTER_ADDR=deepep-internode-${TEST_ID}-master-0-0.deepep-internode-${TEST_ID}
     export MASTER_PORT={{ .Values.deepep.rendezvous.masterPort }}
     export PYTHONUNBUFFERED=1
 

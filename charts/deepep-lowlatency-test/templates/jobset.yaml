@@ -1,0 +1,284 @@
+{{- /*
+JobSet-based DeepEP low latency test - replaces separate master-job.yaml and worker-job.yaml
+Uses JobSet for coordinated multi-pod workloads with built-in DNS and startup ordering
+*/ -}}
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: deepep-lowlatency-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepep-lowlatency-test
+    test-id: {{ .Values.testId | quote }}
+  {{- if .Values.exclusivePlacement }}
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: {{ .Values.exclusivePlacement.topologyKey | default "kubernetes.io/hostname" }}
+  {{- end }}
+spec:
+  # auto-cleanup after completion
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished | default 300 }}
+
+  # enable DNS hostnames for pod discovery
+  # pods addressable as: deepep-lowlatency-<testId>-<replicatedJobName>-<jobIndex>-<podIndex>.<subdomain>
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+
+  # designate master-0-0 as the coordinator pod
+  coordinator:
+    replicatedJob: master
+    jobIndex: 0
+    podIndex: 0
+
+  # failure policy - fail fast on any job failure
+  failurePolicy:
+    maxRestarts: 0
+
+  # success requires all jobs to complete
+  successPolicy:
+    operator: All
+
+  replicatedJobs:
+  # master (rank 0) - runs first, worker waits for it to be ready
+  - name: master
+    replicas: 1
+    template:
+      metadata:
+        labels:
+          app: deepep-lowlatency-test
+          role: master
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriov.enabled }}
+        {{- if .Values.sriov.network }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '{{ .Values.sriov.network }}, {{ .Values.sriov.network }}'
+        {{- else }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+        {{- end }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: deepep-lowlatency-test
+              role: master
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriov.enabled }}
+            {{- if .Values.sriov.network }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: '{{ .Values.sriov.network }}, {{ .Values.sriov.network }}'
+            {{- else }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+            {{- end }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 0 "name" | quote }}
+            containers:
+            - name: deepep-lowlatency-master
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/deepep-test/master-entrypoint.sh"]
+              resources:
+                requests:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+                  {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 0 "gpus" | quote }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+                  {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 0 "gpus" | quote }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: TEST_ID
+                value: {{ .Values.testId | quote }}
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: UCX_LOG_LEVEL
+                value: {{ .Values.ucx.logLevel | quote }}
+              - name: UCX_ERROR_SIGNALS
+                value: ""
+              - name: UCX_TLS
+                value: {{ .Values.ucx.transports | quote }}
+              {{- if .Values.ucx.gidIndex }}
+              - name: UCX_IB_GID_INDEX
+                value: {{ .Values.ucx.gidIndex | quote }}
+              {{- end }}
+              {{- if .Values.sriov.enabled }}
+              - name: SRIOV_INTERFACE
+                value: {{ .Values.sriov.interface | quote }}
+              {{- end }}
+              - name: NCCL_SOCKET_IFNAME
+                value: {{ .Values.sriov.interface | default "eth0" | quote }}
+              - name: NCCL_DEBUG
+                value: {{ .Values.nccl.debug | quote }}
+              # jobset index env vars (automatically injected)
+              - name: JOB_COMPLETION_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              volumeMounts:
+              - name: deepep-test-script
+                mountPath: /opt/deepep-test
+                readOnly: true
+              - name: dshm
+                mountPath: /dev/shm
+            volumes:
+            - name: deepep-test-script
+              configMap:
+                name: deepep-lowlatency-script-{{ .Values.testId }}
+                defaultMode: 493
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
+
+  # worker (rank 1) - waits for master to be ready, then connects
+  - name: worker
+    replicas: 1
+    # wait for master to be ready before starting
+    dependsOn:
+    - name: master
+      status: Ready
+    template:
+      metadata:
+        labels:
+          app: deepep-lowlatency-test
+          role: worker
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriov.enabled }}
+        {{- if .Values.sriov.network }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '{{ .Values.sriov.network }}, {{ .Values.sriov.network }}'
+        {{- else }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+        {{- end }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: deepep-lowlatency-test
+              role: worker
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriov.enabled }}
+            {{- if .Values.sriov.network }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: '{{ .Values.sriov.network }}, {{ .Values.sriov.network }}'
+            {{- else }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+            {{- end }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
+            containers:
+            - name: deepep-lowlatency-worker
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/deepep-test/worker-entrypoint.sh"]
+              resources:
+                requests:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+                  {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 1 "gpus" | quote }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | quote }}
+                  {{ .Values.resources.gpu }}: {{ index .Values.topology.nodes 1 "gpus" | quote }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: TEST_ID
+                value: {{ .Values.testId | quote }}
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: UCX_LOG_LEVEL
+                value: {{ .Values.ucx.logLevel | quote }}
+              - name: UCX_ERROR_SIGNALS
+                value: ""
+              - name: UCX_TLS
+                value: {{ .Values.ucx.transports | quote }}
+              {{- if .Values.ucx.gidIndex }}
+              - name: UCX_IB_GID_INDEX
+                value: {{ .Values.ucx.gidIndex | quote }}
+              {{- end }}
+              {{- if .Values.sriov.enabled }}
+              - name: SRIOV_INTERFACE
+                value: {{ .Values.sriov.interface | quote }}
+              {{- end }}
+              - name: NCCL_SOCKET_IFNAME
+                value: {{ .Values.sriov.interface | default "eth0" | quote }}
+              - name: NCCL_DEBUG
+                value: {{ .Values.nccl.debug | quote }}
+              # use JobSet DNS for master discovery instead of separate Service
+              # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+              - name: MASTER_ADDR
+                value: deepep-lowlatency-{{ .Values.testId }}-master-0-0.deepep-lowlatency-{{ .Values.testId }}
+              - name: MASTER_PORT
+                value: "29500"
+              # jobset index env vars
+              - name: JOB_COMPLETION_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              volumeMounts:
+              - name: deepep-test-script
+                mountPath: /opt/deepep-test
+                readOnly: true
+              - name: dshm
+                mountPath: /dev/shm
+            volumes:
+            - name: deepep-test-script
+              configMap:
+                name: deepep-lowlatency-script-{{ .Values.testId }}
+                defaultMode: 493
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi

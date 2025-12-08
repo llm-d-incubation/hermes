@@ -5,6 +5,7 @@
 testId: "manual-test"  # unique identifier for this test run
 namespace: default  # kubernetes namespace for test resources
 activeDeadlineSeconds: 300  # maximum time for jobs to complete (5 minutes)
+ttlSecondsAfterFinished: 300  # auto-cleanup JobSet after completion (5 minutes)
 
 # container image with DeepGEMM, PyTorch, and CUDA support
 # this image must include:

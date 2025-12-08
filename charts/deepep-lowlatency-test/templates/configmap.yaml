@@ -59,7 +59,9 @@ data:
     TOTAL_GPUS=$((GPU_COUNT * 2))
     echo "Running DeepEP low latency test with $TOTAL_GPUS total GPUs (rank 0-$((GPU_COUNT-1)))"
 
-    export MASTER_ADDR=deepep-lowlatency-master-${TEST_ID}
+    # use JobSet DNS for master address
+    # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+    export MASTER_ADDR=deepep-lowlatency-${TEST_ID}-master-0-0.deepep-lowlatency-${TEST_ID}
     export MASTER_PORT=29500
     export WORLD_SIZE=$TOTAL_GPUS
     export RANK=0
@@ -131,18 +133,14 @@ data:
     cd DeepEP
     git checkout {{ .Values.deepep.version }}
 
-    echo "Waiting for master to be ready..."
-    until getent hosts "deepep-lowlatency-master-${TEST_ID}"; do
-      echo "Waiting for master service..."
-      sleep 2
-    done
-    sleep 5
+    # JobSet's dependsOn ensures worker only starts after master is Ready
+    # no manual DNS polling needed - MASTER_ADDR env var is set by JobSet template
+    echo "Master address (from JobSet DNS): ${MASTER_ADDR}"
 
     TOTAL_GPUS=$((GPU_COUNT * 2))
     echo "Running DeepEP low latency test with $TOTAL_GPUS total GPUs (rank $GPU_COUNT-$((TOTAL_GPUS-1)))"
 
-    export MASTER_ADDR=deepep-lowlatency-master-${TEST_ID}
-    export MASTER_PORT=29500
+    # MASTER_ADDR and MASTER_PORT are already set by JobSet env vars
     export WORLD_SIZE=$TOTAL_GPUS
     export RANK=$GPU_COUNT
     export PYTHONUNBUFFERED=1

@@ -228,11 +228,12 @@ pub struct SelfTestOrchestrator {
     detected_sriov_network: Arc<Mutex<Option<String>>>,
 }
 
-/// Job status for monitoring
+/// JobSet status for monitoring
 #[derive(Debug)]
-struct JobStatus {
+struct JobSetMonitorStatus {
     completed: bool,
     failed: bool,
+    terminal_state: Option<String>,
 }
 
 /// RDMA interface detection functions
@@ -1585,14 +1586,17 @@ impl SelfTestOrchestrator {
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
-            // check job status
-            let job_statuses = self.check_job_statuses(&test_execution.test_id).await?;
+            // check jobset status
+            let jobset_status = self.check_jobset_status(&test_execution.test_id).await?;
 
-            if job_statuses.iter().all(|status| status.completed) {
+            if jobset_status.completed {
                 test_execution.status = TestStatus::Completed;
                 test_execution.end_time = Some(chrono::Utc::now());
                 test_execution.results.success = true;
-                info!("Test completed successfully");
+                info!(
+                    "Test completed successfully (terminal_state: {:?})",
+                    jobset_status.terminal_state
+                );
 
                 // collect logs immediately while pods still exist
                 info!("Collecting logs from completed pods...");
@@ -1601,10 +1605,13 @@ impl SelfTestOrchestrator {
                 break;
             }
 
-            if job_statuses.iter().any(|status| status.failed) {
+            if jobset_status.failed {
                 test_execution.status = TestStatus::Failed;
                 test_execution.end_time = Some(chrono::Utc::now());
-                warn!("Test failed");
+                warn!(
+                    "Test failed (terminal_state: {:?})",
+                    jobset_status.terminal_state
+                );
                 break;
             }
 
@@ -1871,25 +1878,64 @@ impl SelfTestOrchestrator {
         })
     }
 
-    async fn check_job_statuses(&self, test_id: &str) -> Result<Vec<JobStatus>> {
-        use k8s_openapi::api::batch::v1::Job;
-        use kube::{Api, api::ListParams};
+    async fn check_jobset_status(&self, test_id: &str) -> Result<JobSetMonitorStatus> {
+        use crate::crds::jobsets::JobSet;
+        use kube::Api;
 
-        let jobs: Api<Job> = Api::namespaced(self.client.clone(), &self.config.namespace);
+        let jobsets: Api<JobSet> = Api::namespaced(self.client.clone(), &self.config.namespace);
         let test_id_short = &test_id[..8];
 
-        let lp = ListParams::default().labels(&format!("test-id={}", test_id_short));
-        let job_list = jobs.list(&lp).await?;
+        // jobset name follows pattern: <workload>-<testId>
+        // we need to find jobsets with the test-id label
+        let lp = kube::api::ListParams::default().labels(&format!("test-id={}", test_id_short));
+        let jobset_list = jobsets.list(&lp).await?;
 
-        let mut statuses = Vec::new();
-        for job in job_list.items {
-            let completed = job.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0) > 0;
-            let failed = job.status.as_ref().and_then(|s| s.failed).unwrap_or(0) > 0;
-
-            statuses.push(JobStatus { completed, failed });
+        if jobset_list.items.is_empty() {
+            // no jobset found yet, still pending
+            return Ok(JobSetMonitorStatus {
+                completed: false,
+                failed: false,
+                terminal_state: None,
+            });
         }
 
-        Ok(statuses)
+        // should be exactly one jobset per test
+        let jobset = &jobset_list.items[0];
+        let status = jobset.status.as_ref();
+
+        // check terminal state first (most reliable)
+        let terminal_state = status.and_then(|s| s.terminal_state.clone());
+
+        let completed = terminal_state.as_deref() == Some("Completed");
+        let failed = terminal_state.as_deref() == Some("Failed");
+
+        // also check conditions for more detailed status
+        if let Some(status) = status {
+            if let Some(conditions) = &status.conditions {
+                for condition in conditions {
+                    if condition.type_ == "Completed" && condition.status == "True" {
+                        return Ok(JobSetMonitorStatus {
+                            completed: true,
+                            failed: false,
+                            terminal_state,
+                        });
+                    }
+                    if condition.type_ == "Failed" && condition.status == "True" {
+                        return Ok(JobSetMonitorStatus {
+                            completed: false,
+                            failed: true,
+                            terminal_state,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(JobSetMonitorStatus {
+            completed,
+            failed,
+            terminal_state,
+        })
     }
 
     async fn cleanup_test_resources(&self, test_execution: &TestExecution) -> Result<()> {
@@ -1920,9 +1966,10 @@ impl SelfTestOrchestrator {
     }
 
     /// fallback cleanup using kubectl label selectors
+    /// note: JobSet has ttlSecondsAfterFinished for auto-cleanup, but this handles immediate cleanup
     async fn cleanup_via_kubectl(&self, test_execution: &TestExecution) -> Result<()> {
-        use k8s_openapi::api::batch::v1::Job;
-        use k8s_openapi::api::core::v1::{ConfigMap, Service};
+        use crate::crds::jobsets::JobSet;
+        use k8s_openapi::api::core::v1::ConfigMap;
         use kube::{
             Api,
             api::{DeleteParams, ListParams},
@@ -1930,33 +1977,21 @@ impl SelfTestOrchestrator {
 
         let test_id_short = &test_execution.test_id[..8];
         let label_selector = format!("test-id={}", test_id_short);
-
-        // delete all jobs with this test-id
-        let jobs: Api<Job> = Api::namespaced(self.client.clone(), &self.config.namespace);
         let lp = ListParams::default().labels(&label_selector);
-        if let Ok(job_list) = jobs.list(&lp).await {
-            for job in job_list.items {
-                if let Some(job_name) = job.metadata.name
-                    && let Err(e) = jobs.delete(&job_name, &DeleteParams::default()).await
+
+        // delete jobsets with this test-id (this cascades to jobs and pods)
+        let jobsets: Api<JobSet> = Api::namespaced(self.client.clone(), &self.config.namespace);
+        if let Ok(jobset_list) = jobsets.list(&lp).await {
+            for jobset in jobset_list.items {
+                if let Some(jobset_name) = jobset.metadata.name
+                    && let Err(e) = jobsets.delete(&jobset_name, &DeleteParams::default()).await
                 {
-                    tracing::warn!("Failed to delete job {}: {}", job_name, e);
+                    tracing::warn!("Failed to delete jobset {}: {}", jobset_name, e);
                 }
             }
         }
 
-        // delete all services with this test-id
-        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.config.namespace);
-        if let Ok(svc_list) = services.list(&lp).await {
-            for svc in svc_list.items {
-                if let Some(svc_name) = svc.metadata.name
-                    && let Err(e) = services.delete(&svc_name, &DeleteParams::default()).await
-                {
-                    tracing::warn!("Failed to delete service {}: {}", svc_name, e);
-                }
-            }
-        }
-
-        // delete all configmaps with this test-id
+        // delete all configmaps with this test-id (not owned by JobSet)
         let configmaps: Api<ConfigMap> =
             Api::namespaced(self.client.clone(), &self.config.namespace);
         if let Ok(cm_list) = configmaps.list(&lp).await {

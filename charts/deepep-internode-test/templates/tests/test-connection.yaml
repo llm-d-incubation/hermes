@@ -20,11 +20,11 @@ spec:
       set -e
       echo "Testing DeepEP internode test resources..."
 
-      echo "Checking master service..."
-      if getent hosts deepep-internode-master-{{ .Values.testId }}; then
-        echo "✓ Master service is resolvable"
+      echo "Checking JobSet DNS..."
+      if getent hosts deepep-internode-{{ .Values.testId }}-master-0-0.deepep-internode-{{ .Values.testId }}; then
+        echo "✓ Master pod is resolvable via JobSet DNS"
       else
-        echo "✗ Master service is NOT resolvable"
+        echo "✗ Master pod is NOT resolvable via JobSet DNS"
         exit 1
       fi
 
