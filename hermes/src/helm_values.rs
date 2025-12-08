@@ -145,7 +145,7 @@ impl TestValues {
             } else {
                 "rc,ud,dc,tcp".to_string()
             };
-            ("0".to_string(), transports)
+            (transports, "0".to_string())
         };
 
         // get gpu count per node
