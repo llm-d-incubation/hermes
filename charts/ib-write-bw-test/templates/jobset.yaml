@@ -1,0 +1,210 @@
+{{- /*
+JobSet-based ib_write_bw test - server/client RDMA bandwidth test
+Uses JobSet for coordinated multi-pod workloads with built-in DNS and startup ordering
+*/ -}}
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: ib-write-bw-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ib-write-bw-test
+    test-id: {{ .Values.testId | quote }}
+spec:
+  # auto-cleanup after completion
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished | default 300 }}
+
+  # enable DNS hostnames for pod discovery
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+
+  # designate server-0-0 as the coordinator pod
+  coordinator:
+    replicatedJob: server
+    jobIndex: 0
+    podIndex: 0
+
+  # failure policy - fail fast on any job failure
+  failurePolicy:
+    maxRestarts: 0
+
+  # success requires all jobs to complete
+  successPolicy:
+    operator: All
+
+  replicatedJobs:
+  # server - runs first, waits for client to connect
+  - name: server
+    replicas: 1
+    template:
+      metadata:
+        labels:
+          app: ib-write-bw-test
+          role: server
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriovNetwork }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: ib-write-bw-test
+              role: server
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriovNetwork }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 0 "name" | quote }}
+            containers:
+            - name: ib-server
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/ib-test/server-entrypoint.sh"]
+              resources:
+                requests:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: MESSAGE_SIZE
+                value: {{ .Values.perftest.messageSize | quote }}
+              - name: ITERATIONS
+                value: {{ .Values.perftest.iterations | quote }}
+              - name: EXTRA_FLAGS
+                value: {{ .Values.perftest.extraFlags | quote }}
+              volumeMounts:
+              - name: ib-test-script
+                mountPath: /opt/ib-test
+                readOnly: true
+            volumes:
+            - name: ib-test-script
+              configMap:
+                name: ib-write-bw-script-{{ .Values.testId }}
+                defaultMode: 493
+
+  # client - waits for server to be ready, then connects
+  - name: client
+    replicas: 1
+    # wait for server to be ready before starting
+    dependsOn:
+    - name: server
+      status: Ready
+    template:
+      metadata:
+        labels:
+          app: ib-write-bw-test
+          role: client
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriovNetwork }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: ib-write-bw-test
+              role: client
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriovNetwork }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
+            containers:
+            - name: ib-client
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/ib-test/client-entrypoint.sh"]
+              resources:
+                requests:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              # use JobSet DNS for server discovery
+              - name: SERVER_HOST
+                value: ib-write-bw-{{ .Values.testId }}-server-0-0.ib-write-bw-{{ .Values.testId }}
+              - name: MESSAGE_SIZE
+                value: {{ .Values.perftest.messageSize | quote }}
+              - name: ITERATIONS
+                value: {{ .Values.perftest.iterations | quote }}
+              - name: EXTRA_FLAGS
+                value: {{ .Values.perftest.extraFlags | quote }}
+              volumeMounts:
+              - name: ib-test-script
+                mountPath: /opt/ib-test
+                readOnly: true
+            volumes:
+            - name: ib-test-script
+              configMap:
+                name: ib-write-bw-script-{{ .Values.testId }}
+                defaultMode: 493

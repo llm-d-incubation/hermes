@@ -16,12 +16,4 @@ impl TestWorkload for PplxKernelsTest {
     fn expected_duration(&self) -> Duration {
         Duration::from_secs(300)
     }
-
-    fn success_criteria(&self) -> Vec<String> {
-        vec![
-            "Repository cloned successfully".to_string(),
-            "Dependencies installed".to_string(),
-            "All-to-all benchmark completed".to_string(),
-        ]
-    }
 }

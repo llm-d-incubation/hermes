@@ -20,12 +20,4 @@ impl TestWorkload for DeepEpLowLatencyTest {
     fn required_gpus_per_node(&self) -> u32 {
         1
     }
-
-    fn success_criteria(&self) -> Vec<String> {
-        vec![
-            "Repository cloned successfully".to_string(),
-            "GPU detection successful".to_string(),
-            "DeepEP low latency test completed".to_string(),
-        ]
-    }
 }

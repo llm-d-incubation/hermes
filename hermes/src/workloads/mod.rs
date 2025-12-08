@@ -10,6 +10,7 @@ pub mod deepep_internode;
 pub mod deepep_low_latency;
 pub mod deepgemm_minimal;
 pub mod deepgemm_simple;
+pub mod ib_write_bw;
 pub mod nixl_transfer;
 pub mod pplx_kernels;
 
@@ -38,9 +39,6 @@ pub trait TestWorkload: Send + Sync {
     fn required_gpus_per_node(&self) -> u32 {
         0
     }
-
-    /// Success criteria for validation
-    fn success_criteria(&self) -> Vec<String>;
 }
 
 /// Registry of all available test workloads
@@ -52,6 +50,7 @@ pub fn get_all_workloads() -> Vec<Box<dyn TestWorkload>> {
         Box::new(pplx_kernels::PplxKernelsTest),
         Box::new(deepep_internode::DeepEpInternodeTest),
         Box::new(deepep_low_latency::DeepEpLowLatencyTest),
+        Box::new(ib_write_bw::IbWriteBwTest),
     ]
 }
 

@@ -16,12 +16,4 @@ impl TestWorkload for DeepGemmSimpleTest {
     fn expected_duration(&self) -> Duration {
         Duration::from_secs(180)
     }
-
-    fn success_criteria(&self) -> Vec<String> {
-        vec![
-            "Library import successful".to_string(),
-            "Basic FP8 GEMM test passed".to_string(),
-            "M-grouped FP8 GEMM test passed".to_string(),
-        ]
-    }
 }

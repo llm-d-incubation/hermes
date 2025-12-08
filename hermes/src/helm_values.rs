@@ -5,6 +5,52 @@ use std::path::Path;
 use crate::models::{NodeInfo, PlatformType};
 use crate::self_test::SelfTestConfig;
 
+/// placement strategy for test pods
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PlacementStrategy {
+    /// pin pods to specific nodes via nodeSelector (default, current behavior)
+    #[default]
+    Pinned,
+    /// use JobSet exclusive-topology annotation for scheduler-driven placement
+    Exclusive,
+    /// no placement constraints - scheduler decides
+    Any,
+}
+
+impl std::str::FromStr for PlacementStrategy {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pinned" => Ok(Self::Pinned),
+            "exclusive" => Ok(Self::Exclusive),
+            "any" => Ok(Self::Any),
+            _ => Err(anyhow::anyhow!(
+                "Invalid placement strategy: '{}'. Valid options: pinned, exclusive, any",
+                s
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for PlacementStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pinned => write!(f, "pinned"),
+            Self::Exclusive => write!(f, "exclusive"),
+            Self::Any => write!(f, "any"),
+        }
+    }
+}
+
+/// placement configuration for helm values
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacementConfig {
+    /// placement strategy
+    pub strategy: PlacementStrategy,
+}
+
 /// resource requests and limits for test pods
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resources {

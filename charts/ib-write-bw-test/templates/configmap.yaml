@@ -1,0 +1,102 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ib-write-bw-script-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ib-write-bw-test
+    test-id: "{{ .Values.testId }}"
+data:
+  server-entrypoint.sh: |-
+    #!/bin/bash
+    set -e
+    echo "=== IB Write Bandwidth Server ==="
+    echo "Node: ${NODE_NAME}"
+    echo "Pod: ${POD_NAME}"
+    echo "IP: ${POD_IP}"
+    echo ""
+
+    echo "Checking RDMA devices..."
+    if command -v ibv_devices &> /dev/null; then
+        ibv_devices
+    else
+        echo "ibv_devices not found, checking /sys..."
+        ls -la /sys/class/infiniband/ 2>/dev/null || echo "No infiniband devices in /sys"
+    fi
+    echo ""
+
+    echo "Checking for ib_write_bw..."
+    if ! command -v ib_write_bw &> /dev/null; then
+        echo "ERROR: ib_write_bw not found in PATH"
+        exit 1
+    fi
+    echo "ib_write_bw location: $(which ib_write_bw)"
+    echo ""
+
+    echo "Starting ib_write_bw server..."
+    echo "Parameters: -s ${MESSAGE_SIZE} -n ${ITERATIONS} ${EXTRA_FLAGS}"
+    echo ""
+
+    # run ib_write_bw in server mode (no host argument)
+    # -a = run all message sizes (if MESSAGE_SIZE not specified)
+    # -d = device (auto-detect)
+    # -F = do not fail on an error in the fabric query
+    ib_write_bw -s "${MESSAGE_SIZE}" -n "${ITERATIONS}" -F ${EXTRA_FLAGS}
+
+    echo ""
+    echo "=== Server completed ==="
+
+  client-entrypoint.sh: |-
+    #!/bin/bash
+    set -e
+    echo "=== IB Write Bandwidth Client ==="
+    echo "Node: ${NODE_NAME}"
+    echo "Pod: ${POD_NAME}"
+    echo "IP: ${POD_IP}"
+    echo "Server: ${SERVER_HOST}"
+    echo ""
+
+    echo "Checking RDMA devices..."
+    if command -v ibv_devices &> /dev/null; then
+        ibv_devices
+    else
+        echo "ibv_devices not found, checking /sys..."
+        ls -la /sys/class/infiniband/ 2>/dev/null || echo "No infiniband devices in /sys"
+    fi
+    echo ""
+
+    echo "Checking for ib_write_bw..."
+    if ! command -v ib_write_bw &> /dev/null; then
+        echo "ERROR: ib_write_bw not found in PATH"
+        exit 1
+    fi
+    echo ""
+
+    echo "Resolving server hostname..."
+    SERVER_IP=$(getent hosts "${SERVER_HOST}" | awk '{print $1}' | head -1)
+    if [ -z "${SERVER_IP}" ]; then
+        echo "ERROR: Could not resolve ${SERVER_HOST}"
+        echo "Waiting 5 seconds and retrying..."
+        sleep 5
+        SERVER_IP=$(getent hosts "${SERVER_HOST}" | awk '{print $1}' | head -1)
+        if [ -z "${SERVER_IP}" ]; then
+            echo "ERROR: Still cannot resolve ${SERVER_HOST}"
+            exit 1
+        fi
+    fi
+    echo "Server IP: ${SERVER_IP}"
+    echo ""
+
+    echo "Waiting for server to be ready..."
+    sleep 5
+
+    echo "Starting ib_write_bw client..."
+    echo "Parameters: -s ${MESSAGE_SIZE} -n ${ITERATIONS} ${EXTRA_FLAGS} ${SERVER_IP}"
+    echo ""
+
+    # run ib_write_bw in client mode (with server host as argument)
+    ib_write_bw -s "${MESSAGE_SIZE}" -n "${ITERATIONS}" -F ${EXTRA_FLAGS} "${SERVER_IP}"
+
+    echo ""
+    echo "=== Client completed ==="
