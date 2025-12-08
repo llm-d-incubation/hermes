@@ -25,7 +25,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY hermes ./hermes
 COPY roce-detector ./roce-detector
-COPY manifests ./manifests
+COPY charts ./charts
 
 # build both binaries
 RUN cargo build --release -p hermes && \
