@@ -20,4 +20,8 @@ impl TestWorkload for IbWriteBwTest {
     fn required_gpus_per_node(&self) -> u32 {
         0
     }
+
+    fn default_image(&self) -> Option<&str> {
+        Some("quay.io/wseaton/netdebug:latest")
+    }
 }

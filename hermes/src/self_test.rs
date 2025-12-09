@@ -1910,23 +1910,23 @@ impl SelfTestOrchestrator {
         let failed = terminal_state.as_deref() == Some("Failed");
 
         // also check conditions for more detailed status
-        if let Some(status) = status {
-            if let Some(conditions) = &status.conditions {
-                for condition in conditions {
-                    if condition.type_ == "Completed" && condition.status == "True" {
-                        return Ok(JobSetMonitorStatus {
-                            completed: true,
-                            failed: false,
-                            terminal_state,
-                        });
-                    }
-                    if condition.type_ == "Failed" && condition.status == "True" {
-                        return Ok(JobSetMonitorStatus {
-                            completed: false,
-                            failed: true,
-                            terminal_state,
-                        });
-                    }
+        if let Some(status) = status
+            && let Some(conditions) = &status.conditions
+        {
+            for condition in conditions {
+                if condition.type_ == "Completed" && condition.status == "True" {
+                    return Ok(JobSetMonitorStatus {
+                        completed: true,
+                        failed: false,
+                        terminal_state,
+                    });
+                }
+                if condition.type_ == "Failed" && condition.status == "True" {
+                    return Ok(JobSetMonitorStatus {
+                        completed: false,
+                        failed: true,
+                        terminal_state,
+                    });
                 }
             }
         }

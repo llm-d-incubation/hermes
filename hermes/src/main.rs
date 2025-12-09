@@ -103,12 +103,9 @@ enum Commands {
         #[arg(short, long)]
         workload: Option<String>,
 
-        /// Container image to use for test workloads
-        #[arg(
-            long,
-            default_value = "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd"
-        )]
-        image: String,
+        /// Container image to use for test workloads (default: workload-specific or global default)
+        #[arg(long)]
+        image: Option<String>,
 
         /// Override number of GPUs per node (default: use workload's requirement)
         #[arg(long)]
@@ -276,7 +273,19 @@ async fn main() -> Result<()> {
             ucx_gid_index,
         } => {
             use hermes::self_test::SelfTestConfig;
+            use hermes::workloads::get_workload_by_name;
             use std::time::Duration;
+
+            const GLOBAL_DEFAULT_IMAGE: &str = "ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd";
+
+            // resolve image: CLI override > workload default > global default
+            let resolved_image = image.unwrap_or_else(|| {
+                workload
+                    .as_ref()
+                    .and_then(|name| get_workload_by_name(name))
+                    .and_then(|w| w.default_image().map(String::from))
+                    .unwrap_or_else(|| GLOBAL_DEFAULT_IMAGE.to_string())
+            });
 
             let config = SelfTestConfig {
                 namespace,
@@ -309,7 +318,7 @@ async fn main() -> Result<()> {
                     SignalHandling::CleanupOnSignal
                 },
                 workload,
-                image,
+                image: resolved_image,
                 load_from,
                 gpus_per_node,
                 cache_check: ImageCacheCheck::CheckCache,

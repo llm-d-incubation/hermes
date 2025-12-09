@@ -2,6 +2,8 @@
 // kopium command: kopium -f - --docs
 // kopium version: 0.22.5
 
+#![allow(clippy::all)]
+
 #[allow(unused_imports)]
 mod prelude {
     pub use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;

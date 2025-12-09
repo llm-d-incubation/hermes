@@ -39,6 +39,11 @@ pub trait TestWorkload: Send + Sync {
     fn required_gpus_per_node(&self) -> u32 {
         0
     }
+
+    /// Default container image for this workload (overrides CLI default if Some)
+    fn default_image(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Registry of all available test workloads
