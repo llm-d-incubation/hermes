@@ -1485,6 +1485,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -1885,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "roce-detector"
-version = "0.2.0-rc.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
