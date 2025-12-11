@@ -2,8 +2,9 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{Api, Client, api::ListParams};
 use minijinja::value::{Object, Value};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
@@ -12,6 +13,8 @@ use tracing::{error, info, warn};
 
 use crate::analyzer::ClusterAnalyzer;
 use crate::crds::sriovnetworks::SriovNetwork;
+use crate::helm::HelmExecutor;
+use crate::helm_values::TestValues;
 use crate::models::{
     CleanupMode, ClusterReport, ExecutionMode, GpuRequirement, ImageCacheCheck, LabelDetailLevel,
     NodeInfo, PlatformType, SignalHandling, WorkloadSource,
@@ -225,11 +228,12 @@ pub struct SelfTestOrchestrator {
     detected_sriov_network: Arc<Mutex<Option<String>>>,
 }
 
-/// Job status for monitoring
+/// JobSet status for monitoring
 #[derive(Debug)]
-struct JobStatus {
+struct JobSetMonitorStatus {
     completed: bool,
     failed: bool,
+    terminal_state: Option<String>,
 }
 
 /// RDMA interface detection functions
@@ -655,6 +659,30 @@ impl SelfTestOrchestrator {
 
     /// static cleanup helper for signal handler
     async fn cleanup_resources_static(
+        _client: &Client,
+        namespace: &str,
+        test_execution: &TestExecution,
+    ) -> Result<()> {
+        // try helm uninstall first
+        if let Ok(helm) = HelmExecutor::new().await {
+            let test_id_short = &test_execution.test_id[..8];
+            let release_name = format!("{}-{}", test_execution.workload_name, test_id_short);
+
+            if let Err(e) = helm.uninstall(&release_name, namespace).await {
+                tracing::debug!("Helm uninstall failed in signal handler: {}", e);
+                // fallback to kubectl cleanup
+                Self::cleanup_via_kubectl_static(_client, namespace, test_execution).await?;
+            }
+        } else {
+            // helm not available, use kubectl cleanup
+            Self::cleanup_via_kubectl_static(_client, namespace, test_execution).await?;
+        }
+
+        Ok(())
+    }
+
+    /// static kubectl cleanup for signal handler
+    async fn cleanup_via_kubectl_static(
         client: &Client,
         namespace: &str,
         test_execution: &TestExecution,
@@ -707,6 +735,97 @@ impl SelfTestOrchestrator {
         }
 
         Ok(())
+    }
+
+    /// get chart path for a workload (extracts embedded chart to temp dir if needed)
+    fn get_chart_path(workload_name: &str) -> Result<PathBuf> {
+        use crate::embedded_files::get_chart_files;
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+
+        // use a persistent cache dir for extracted charts
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("hermes")
+            .join("charts")
+            .join(workload_name);
+
+        // if chart already extracted and valid, use it
+        if cache_dir.join("Chart.yaml").exists() {
+            return Ok(cache_dir);
+        }
+
+        // extract embedded chart
+        let chart_files = get_chart_files(workload_name)
+            .ok_or_else(|| anyhow::anyhow!("Chart not found: {}", workload_name))?;
+
+        // create chart directory
+        std::fs::create_dir_all(&cache_dir)?;
+
+        for (rel_path, b64_content) in chart_files {
+            let file_path = cache_dir.join(rel_path);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let content = BASE64
+                .decode(b64_content)
+                .map_err(|e| anyhow::anyhow!("Failed to decode chart file {}: {}", rel_path, e))?;
+            std::fs::write(&file_path, content)?;
+        }
+
+        Ok(cache_dir)
+    }
+
+    /// convert SelectedNode back to minimal NodeInfo for TestValues
+    fn selected_node_to_node_info(&self, selected: &SelectedNode) -> NodeInfo {
+        use crate::models::{PlatformSpecificData, RdmaCapability};
+
+        // extract platform type from platform_specific_info
+        let platform_type = if selected.platform_specific_info.contains_key("ib_fabric") {
+            PlatformType::CoreWeave
+        } else if selected
+            .platform_specific_info
+            .contains_key("fabric_domain")
+        {
+            PlatformType::GKE
+        } else {
+            PlatformType::GenericKubernetes
+        };
+
+        NodeInfo {
+            name: selected.name.clone(),
+            rdma_capability: if selected.rdma_resource.is_some() {
+                RdmaCapability::Capable
+            } else {
+                RdmaCapability::NotCapable
+            },
+            rdma_type: None,
+            rdma_resource: selected.rdma_resource.clone(),
+            platform_type,
+            topology_block: selected.topology_block.clone(),
+            topology_detection: None,
+            ib_speed: selected.platform_specific_info.get("ib_speed").cloned(),
+            ib_fabric: selected.platform_specific_info.get("ib_fabric").cloned(),
+            ib_ports: None,
+            leafgroup: selected.platform_specific_info.get("leafgroup").cloned(),
+            superpod: None,
+            neighbors: vec![],
+            mellanox_nics: vec![],
+            node_labels: HashMap::new(),
+            gpu_count: None,
+            gpu_type: None,
+            gpu_allocatable: None,
+            gpu_allocated: None,
+            cpu_allocatable: None,
+            cpu_allocated: None,
+            memory_allocatable: None,
+            memory_allocated: None,
+            sriov_resources: selected.sriov_resources.clone(),
+            platform_data: PlatformSpecificData::Generic,
+            image_cache_status: crate::models::ImageCacheStatus::Unknown,
+            image_cache_checked_at: None,
+            topology_rule_error: None,
+            roce_config: None,
+        }
     }
 
     /// Build RDMA configuration info for workload rendering
@@ -1300,17 +1419,59 @@ impl SelfTestOrchestrator {
         );
         info!("\n{}", "=".repeat(80));
 
-        // build RDMA info
-        let rdma_info = self.create_rdma_info(test_execution).await;
+        // create helm executor
+        let helm = HelmExecutor::new().await.map_err(|e| {
+            anyhow::anyhow!(
+                "Helm 3.x required but not found. Install from https://helm.sh\nError: {}",
+                e
+            )
+        })?;
 
-        // render using the workload's trait method
+        // convert nodes to NodeInfo for TestValues
+        let node1_info = self.selected_node_to_node_info(&test_execution.node_pair.node1);
+        let node2_info = self.selected_node_to_node_info(&test_execution.node_pair.node2);
+
+        // use test execution's test_id (truncated to 8 chars for k8s labels)
         let test_id_short = &test_execution.test_id[..8];
-        let rendered_manifests = workload.render_manifest(
-            test_id_short,
-            &test_execution.node_pair,
-            &self.config,
-            &rdma_info,
-        )?;
+
+        // get effective SR-IOV network (from config or auto-detected)
+        let detected_sriov = self.detected_sriov_network.lock().await;
+        let effective_sriov = self
+            .config
+            .sriov_network
+            .clone()
+            .or_else(|| detected_sriov.clone());
+        drop(detected_sriov); // release lock
+
+        // create config with effective SR-IOV network
+        let mut effective_config = self.config.clone();
+        effective_config.sriov_network = effective_sriov;
+
+        // create test values with the same test_id
+        let test_values =
+            TestValues::from_node_pair(&node1_info, &node2_info, &effective_config, test_id_short)?;
+
+        // write values to temp file
+        let temp_dir = std::env::temp_dir();
+        let values_file = temp_dir.join(format!("hermes-values-{}.yaml", test_values.test_id));
+        test_values.write_to_file(&values_file)?;
+
+        // get chart path
+        let chart_path = Self::get_chart_path(workload.name())?;
+
+        // render with helm template
+        let release_name = format!("{}-{}", workload.name(), test_id_short);
+        let rendered_yaml = helm
+            .template(
+                &release_name,
+                &chart_path,
+                Some(&values_file),
+                &self.config.namespace,
+            )
+            .await?;
+
+        // build RDMA info for header display
+        let rdma_info = self.create_rdma_info(test_execution).await;
 
         // create and display header with configuration
         let header = ManifestHeader {
@@ -1322,8 +1483,11 @@ impl SelfTestOrchestrator {
         println!("{}", header);
 
         // output the rendered manifests
-        println!("{}", rendered_manifests);
+        println!("{}", rendered_yaml);
         println!("{}", "-".repeat(40));
+
+        // cleanup temp file
+        let _ = std::fs::remove_file(&values_file);
 
         info!("\nDry run completed - manifests rendered above");
 
@@ -1335,68 +1499,72 @@ impl SelfTestOrchestrator {
         test_execution: &mut TestExecution,
         workload: &dyn workloads::TestWorkload,
     ) -> Result<()> {
-        use k8s_openapi::api::batch::v1::Job;
-        use k8s_openapi::api::core::v1::{ConfigMap, Service};
-        use kube::{Api, api::PostParams};
+        // create helm executor
+        let helm = HelmExecutor::new().await.map_err(|e| {
+            anyhow::anyhow!(
+                "Helm 3.x required but not found. Install from https://helm.sh\nError: {}",
+                e
+            )
+        })?;
 
-        // build RDMA info
-        let rdma_info = self.create_rdma_info(test_execution).await;
+        // convert nodes to NodeInfo for TestValues
+        let node1_info = self.selected_node_to_node_info(&test_execution.node_pair.node1);
+        let node2_info = self.selected_node_to_node_info(&test_execution.node_pair.node2);
 
-        // render using the workload's trait method
+        // use test execution's test_id (truncated to 8 chars for k8s labels)
         let test_id_short = &test_execution.test_id[..8];
-        let rendered_manifests = workload.render_manifest(
-            test_id_short,
-            &test_execution.node_pair,
-            &self.config,
-            &rdma_info,
-        )?;
 
-        // parse the rendered YAML manifest
-        let docs: Result<Vec<serde_yaml::Value>, _> =
-            serde_yaml::Deserializer::from_str(&rendered_manifests)
-                .map(serde_yaml::Value::deserialize)
-                .collect();
-        let docs = docs?;
+        // get effective SR-IOV network (from config or auto-detected)
+        let detected_sriov = self.detected_sriov_network.lock().await;
+        let effective_sriov = self
+            .config
+            .sriov_network
+            .clone()
+            .or_else(|| detected_sriov.clone());
+        drop(detected_sriov); // release lock
 
-        for doc in docs {
-            if let Some(kind) = doc.get("kind").and_then(|k| k.as_str()) {
-                match kind {
-                    "ConfigMap" => {
-                        let configmaps: Api<ConfigMap> =
-                            Api::namespaced(self.client.clone(), &self.config.namespace);
-                        let cm: ConfigMap = serde_yaml::from_value(doc)?;
-                        info!(
-                            "Creating configmap: {}",
-                            cm.metadata.name.as_ref().unwrap_or(&"unknown".to_string())
-                        );
-                        configmaps.create(&PostParams::default(), &cm).await?;
-                    }
-                    "Service" => {
-                        let services: Api<Service> =
-                            Api::namespaced(self.client.clone(), &self.config.namespace);
-                        let svc: Service = serde_yaml::from_value(doc)?;
-                        info!(
-                            "Creating service: {}",
-                            svc.metadata.name.as_ref().unwrap_or(&"unknown".to_string())
-                        );
-                        services.create(&PostParams::default(), &svc).await?;
-                    }
-                    "Job" => {
-                        let jobs: Api<Job> =
-                            Api::namespaced(self.client.clone(), &self.config.namespace);
-                        let job: Job = serde_yaml::from_value(doc)?;
-                        info!(
-                            "Creating job: {}",
-                            job.metadata.name.as_ref().unwrap_or(&"unknown".to_string())
-                        );
-                        jobs.create(&PostParams::default(), &job).await?;
-                    }
-                    _ => {
-                        warn!("Skipping unsupported resource kind: {}", kind);
-                    }
-                }
-            }
-        }
+        // create config with effective SR-IOV network
+        let mut effective_config = self.config.clone();
+        effective_config.sriov_network = effective_sriov;
+
+        // create test values with the same test_id
+        let test_values =
+            TestValues::from_node_pair(&node1_info, &node2_info, &effective_config, test_id_short)?;
+
+        // write values to temp file
+        let temp_dir = std::env::temp_dir();
+        let values_file = temp_dir.join(format!("hermes-values-{}.yaml", test_values.test_id));
+        test_values.write_to_file(&values_file)?;
+
+        // get chart path
+        let chart_path = Self::get_chart_path(workload.name())?;
+
+        // generate release name
+        let release_name = format!("{}-{}", workload.name(), test_id_short);
+
+        info!("Installing Helm release: {}", release_name);
+
+        // start log streaming BEFORE helm install so it's ready when pods appear
+        let log_stream_handle = self.spawn_log_streamers(&test_execution.test_id);
+
+        // install with helm (wait=false since we monitor separately)
+        helm.install(
+            &release_name,
+            &chart_path,
+            Some(&values_file),
+            &self.config.namespace,
+            false, // don't wait - we have our own monitoring
+            None,  // no timeout since we're not waiting
+        )
+        .await?;
+
+        info!("Helm release installed successfully");
+
+        // keep handle alive by forgetting it - the background task will continue running
+        std::mem::forget(log_stream_handle);
+
+        // cleanup temp file
+        let _ = std::fs::remove_file(&values_file);
 
         Ok(())
     }
@@ -1411,29 +1579,39 @@ impl SelfTestOrchestrator {
 
         info!("Monitoring test execution...");
 
-        // spawn log streaming tasks for each pod
-        let log_stream_handle = self.spawn_log_streamers(&test_execution.test_id);
+        // log streaming was already started in deploy_workload, no need to spawn again
 
         // wait for test completion or timeout
         let timeout = workload.expected_duration();
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
-            // check job status
-            let job_statuses = self.check_job_statuses(&test_execution.test_id).await?;
+            // check jobset status
+            let jobset_status = self.check_jobset_status(&test_execution.test_id).await?;
 
-            if job_statuses.iter().all(|status| status.completed) {
+            if jobset_status.completed {
                 test_execution.status = TestStatus::Completed;
                 test_execution.end_time = Some(chrono::Utc::now());
                 test_execution.results.success = true;
-                info!("Test completed successfully");
+                info!(
+                    "Test completed successfully (terminal_state: {:?})",
+                    jobset_status.terminal_state
+                );
+
+                // collect logs immediately while pods still exist
+                info!("Collecting logs from completed pods...");
+                let _ = self.collect_completed_logs(test_execution).await;
+
                 break;
             }
 
-            if job_statuses.iter().any(|status| status.failed) {
+            if jobset_status.failed {
                 test_execution.status = TestStatus::Failed;
                 test_execution.end_time = Some(chrono::Utc::now());
-                warn!("Test failed");
+                warn!(
+                    "Test failed (terminal_state: {:?})",
+                    jobset_status.terminal_state
+                );
                 break;
             }
 
@@ -1460,9 +1638,55 @@ impl SelfTestOrchestrator {
             }
         }
 
-        // wait a bit for final logs to flush
-        sleep(Duration::from_secs(2)).await;
-        drop(log_stream_handle);
+        // wait a bit longer for any background log streaming to finish
+        sleep(Duration::from_secs(1)).await;
+        // log handle was forgotten in deploy_workload, task runs in background
+        // (log collection now happens immediately in the monitoring loop above)
+
+        Ok(())
+    }
+
+    /// Collect logs from completed pods (for jobs that finish too quickly for streaming)
+    async fn collect_completed_logs(&self, test_execution: &mut TestExecution) -> Result<()> {
+        use k8s_openapi::api::core::v1::Pod;
+        use kube::{
+            Api,
+            api::{ListParams, LogParams},
+        };
+        use owo_colors::OwoColorize;
+
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.config.namespace);
+        let test_id_short = &test_execution.test_id[..8];
+        let lp = ListParams::default().labels(&format!("test-id={}", test_id_short));
+
+        info!("Looking for pods with label test-id={}", test_id_short);
+
+        if let Ok(pod_list) = pods.list(&lp).await {
+            info!("Found {} pods", pod_list.items.len());
+            for pod in pod_list.items {
+                if let Some(pod_name) = &pod.metadata.name {
+                    let log_params = LogParams {
+                        tail_lines: Some(100),
+                        ..Default::default()
+                    };
+
+                    if let Ok(logs) = pods.logs(pod_name, &log_params).await {
+                        // color logs based on pod role (cyan for target/master, yellow for initiator/worker)
+                        if pod_name.contains("target") || pod_name.contains("master") {
+                            println!("\n[{}] Logs:", pod_name.cyan());
+                            for line in logs.lines() {
+                                println!("[{}] {}", pod_name.cyan(), line);
+                            }
+                        } else {
+                            println!("\n[{}] Logs:", pod_name.yellow());
+                            for line in logs.lines() {
+                                println!("[{}] {}", pod_name.yellow(), line);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1513,8 +1737,8 @@ impl SelfTestOrchestrator {
                 }
             });
 
-            // wait a bit for pods to be created
-            sleep(Duration::from_secs(5)).await;
+            // small delay to let Kubernetes create pod objects (reduced from 5s for faster tests)
+            sleep(Duration::from_millis(500)).await;
 
             let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
             let test_id_short = &test_id[..8];
@@ -1608,9 +1832,7 @@ impl SelfTestOrchestrator {
                     let tx_clone = tx.clone();
 
                     let task = tokio::spawn(async move {
-                        // wait for pod to be ready
-                        sleep(Duration::from_secs(3)).await;
-
+                        // start streaming immediately; kubectl handles waiting for pod readiness
                         let log_params = LogParams {
                             follow: true,
                             tail_lines: Some(100),
@@ -1656,30 +1878,98 @@ impl SelfTestOrchestrator {
         })
     }
 
-    async fn check_job_statuses(&self, test_id: &str) -> Result<Vec<JobStatus>> {
-        use k8s_openapi::api::batch::v1::Job;
-        use kube::{Api, api::ListParams};
+    async fn check_jobset_status(&self, test_id: &str) -> Result<JobSetMonitorStatus> {
+        use crate::crds::jobsets::JobSet;
+        use kube::Api;
 
-        let jobs: Api<Job> = Api::namespaced(self.client.clone(), &self.config.namespace);
+        let jobsets: Api<JobSet> = Api::namespaced(self.client.clone(), &self.config.namespace);
         let test_id_short = &test_id[..8];
 
-        let lp = ListParams::default().labels(&format!("test-id={}", test_id_short));
-        let job_list = jobs.list(&lp).await?;
+        // jobset name follows pattern: <workload>-<testId>
+        // we need to find jobsets with the test-id label
+        let lp = kube::api::ListParams::default().labels(&format!("test-id={}", test_id_short));
+        let jobset_list = jobsets.list(&lp).await?;
 
-        let mut statuses = Vec::new();
-        for job in job_list.items {
-            let completed = job.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0) > 0;
-            let failed = job.status.as_ref().and_then(|s| s.failed).unwrap_or(0) > 0;
-
-            statuses.push(JobStatus { completed, failed });
+        if jobset_list.items.is_empty() {
+            // no jobset found yet, still pending
+            return Ok(JobSetMonitorStatus {
+                completed: false,
+                failed: false,
+                terminal_state: None,
+            });
         }
 
-        Ok(statuses)
+        // should be exactly one jobset per test
+        let jobset = &jobset_list.items[0];
+        let status = jobset.status.as_ref();
+
+        // check terminal state first (most reliable)
+        let terminal_state = status.and_then(|s| s.terminal_state.clone());
+
+        let completed = terminal_state.as_deref() == Some("Completed");
+        let failed = terminal_state.as_deref() == Some("Failed");
+
+        // also check conditions for more detailed status
+        if let Some(status) = status
+            && let Some(conditions) = &status.conditions
+        {
+            for condition in conditions {
+                if condition.type_ == "Completed" && condition.status == "True" {
+                    return Ok(JobSetMonitorStatus {
+                        completed: true,
+                        failed: false,
+                        terminal_state,
+                    });
+                }
+                if condition.type_ == "Failed" && condition.status == "True" {
+                    return Ok(JobSetMonitorStatus {
+                        completed: false,
+                        failed: true,
+                        terminal_state,
+                    });
+                }
+            }
+        }
+
+        Ok(JobSetMonitorStatus {
+            completed,
+            failed,
+            terminal_state,
+        })
     }
 
     async fn cleanup_test_resources(&self, test_execution: &TestExecution) -> Result<()> {
-        use k8s_openapi::api::batch::v1::Job;
-        use k8s_openapi::api::core::v1::{ConfigMap, Service};
+        // try helm uninstall first
+        if let Ok(helm) = HelmExecutor::new().await {
+            let test_id_short = &test_execution.test_id[..8];
+            let release_name = format!("{}-{}", test_execution.workload_name, test_id_short);
+
+            info!("Uninstalling Helm release: {}", release_name);
+
+            if let Err(e) = helm.uninstall(&release_name, &self.config.namespace).await {
+                warn!(
+                    "Helm uninstall failed, falling back to kubectl cleanup: {}",
+                    e
+                );
+                // fallback to label-based cleanup
+                self.cleanup_via_kubectl(test_execution).await?;
+            } else {
+                info!("Helm release uninstalled successfully");
+            }
+        } else {
+            // helm not available, use kubectl cleanup
+            warn!("Helm not available, using kubectl cleanup");
+            self.cleanup_via_kubectl(test_execution).await?;
+        }
+
+        Ok(())
+    }
+
+    /// fallback cleanup using kubectl label selectors
+    /// note: JobSet has ttlSecondsAfterFinished for auto-cleanup, but this handles immediate cleanup
+    async fn cleanup_via_kubectl(&self, test_execution: &TestExecution) -> Result<()> {
+        use crate::crds::jobsets::JobSet;
+        use k8s_openapi::api::core::v1::ConfigMap;
         use kube::{
             Api,
             api::{DeleteParams, ListParams},
@@ -1687,33 +1977,21 @@ impl SelfTestOrchestrator {
 
         let test_id_short = &test_execution.test_id[..8];
         let label_selector = format!("test-id={}", test_id_short);
-
-        // delete all jobs with this test-id
-        let jobs: Api<Job> = Api::namespaced(self.client.clone(), &self.config.namespace);
         let lp = ListParams::default().labels(&label_selector);
-        if let Ok(job_list) = jobs.list(&lp).await {
-            for job in job_list.items {
-                if let Some(job_name) = job.metadata.name
-                    && let Err(e) = jobs.delete(&job_name, &DeleteParams::default()).await
+
+        // delete jobsets with this test-id (this cascades to jobs and pods)
+        let jobsets: Api<JobSet> = Api::namespaced(self.client.clone(), &self.config.namespace);
+        if let Ok(jobset_list) = jobsets.list(&lp).await {
+            for jobset in jobset_list.items {
+                if let Some(jobset_name) = jobset.metadata.name
+                    && let Err(e) = jobsets.delete(&jobset_name, &DeleteParams::default()).await
                 {
-                    tracing::warn!("Failed to delete job {}: {}", job_name, e);
+                    tracing::warn!("Failed to delete jobset {}: {}", jobset_name, e);
                 }
             }
         }
 
-        // delete all services with this test-id
-        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.config.namespace);
-        if let Ok(svc_list) = services.list(&lp).await {
-            for svc in svc_list.items {
-                if let Some(svc_name) = svc.metadata.name
-                    && let Err(e) = services.delete(&svc_name, &DeleteParams::default()).await
-                {
-                    tracing::warn!("Failed to delete service {}: {}", svc_name, e);
-                }
-            }
-        }
-
-        // delete all configmaps with this test-id
+        // delete all configmaps with this test-id (not owned by JobSet)
         let configmaps: Api<ConfigMap> =
             Api::namespaced(self.client.clone(), &self.config.namespace);
         if let Ok(cm_list) = configmaps.list(&lp).await {

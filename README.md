@@ -67,6 +67,12 @@ HTTPS_PROXY=http://proxy-ip:port hermes scan
 
 ## Self-Test Framework
 
+**Prerequisite**: Most self-tests require [JobSet](https://github.com/kubernetes-sigs/jobset) to be installed on the cluster:
+
+```bash
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/jobset/releases/download/v0.10.1/manifests.yaml
+```
+
 Automatically deploys RDMA workloads on intelligently-selected node pairs:
 
 ```bash

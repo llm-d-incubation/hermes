@@ -1,0 +1,276 @@
+{{- /*
+JobSet-based NIXL transfer test - replaces separate target-job.yaml and initiator-job.yaml
+Uses JobSet for coordinated multi-pod workloads with built-in DNS and startup ordering
+*/ -}}
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: nixl-test-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-transfer-test
+    test-id: {{ .Values.testId | quote }}
+  {{- if .Values.exclusivePlacement }}
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: {{ .Values.exclusivePlacement.topologyKey | default "kubernetes.io/hostname" }}
+  {{- end }}
+spec:
+  # auto-cleanup after completion
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished | default 300 }}
+
+  # enable DNS hostnames for pod discovery
+  # pods addressable as: nixl-test-<testId>-<replicatedJobName>-<jobIndex>-<podIndex>.<subdomain>
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+
+  # designate target-0-0 as the coordinator pod
+  coordinator:
+    replicatedJob: target
+    jobIndex: 0
+    podIndex: 0
+
+  # failure policy - fail fast on any job failure
+  failurePolicy:
+    maxRestarts: 0
+
+  # success requires all jobs to complete
+  successPolicy:
+    operator: All
+
+  replicatedJobs:
+  # target (server) - runs first, waits for initiator to connect
+  - name: target
+    replicas: 1
+    template:
+      metadata:
+        labels:
+          app: nixl-transfer-test
+          role: target
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriovNetwork }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: nixl-transfer-test
+              role: target
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriovNetwork }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.hostIPC }}
+            hostIPC: true
+            serviceAccountName: nixl-test-{{ .Values.testId }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 0 "name" | quote }}
+            containers:
+            - name: nixl-target
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/nixl-test/target-entrypoint.sh"]
+              {{- if .Values.hostIPC }}
+              securityContext:
+                privileged: true
+              {{- end }}
+              resources:
+                requests:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  {{- if .Values.resources.gpu }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+                  {{- end }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  {{- if .Values.resources.gpu }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+                  {{- end }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: UCX_LOG_LEVEL
+                value: {{ .Values.ucx.logLevel | quote }}
+              - name: UCX_ERROR_SIGNALS
+                value: ""
+              - name: UCX_TLS
+                value: {{ .Values.ucx.transports | quote }}
+              - name: UCX_IB_GID_INDEX
+                value: {{ .Values.ucx.gidIndex | quote }}
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: RDMA_DEVICE
+                value: ""
+              # jobset index env vars (automatically injected)
+              - name: JOB_COMPLETION_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              volumeMounts:
+              - name: nixl-test-script
+                mountPath: /opt/nixl-test
+                readOnly: true
+              - name: dshm
+                mountPath: /dev/shm
+            volumes:
+            - name: nixl-test-script
+              configMap:
+                name: nixl-test-script-{{ .Values.testId }}
+                defaultMode: 493
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 4Gi
+
+  # initiator (client) - waits for target to be ready, then connects
+  - name: initiator
+    replicas: 1
+    # wait for target to be ready before starting
+    dependsOn:
+    - name: target
+      status: Ready
+    template:
+      metadata:
+        labels:
+          app: nixl-transfer-test
+          role: initiator
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriovNetwork }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: nixl-transfer-test
+              role: initiator
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriovNetwork }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: {{ .Values.sriovNetwork | quote }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.hostIPC }}
+            hostIPC: true
+            serviceAccountName: nixl-test-{{ .Values.testId }}
+            {{- end }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ index .Values.topology.nodes 1 "name" | quote }}
+            containers:
+            - name: nixl-initiator
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/nixl-test/initiator-entrypoint.sh"]
+              {{- if .Values.hostIPC }}
+              securityContext:
+                privileged: true
+              {{- end }}
+              resources:
+                requests:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  {{- if .Values.resources.gpu }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+                  {{- end }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{- if .Values.resources.rdma }}
+                  {{ .Values.resources.rdma }}: "1"
+                  {{- end }}
+                  {{- if .Values.resources.gpu }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default "1" | quote }}
+                  {{- end }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: UCX_LOG_LEVEL
+                value: {{ .Values.ucx.logLevel | quote }}
+              - name: UCX_ERROR_SIGNALS
+                value: ""
+              - name: UCX_TLS
+                value: {{ .Values.ucx.transports | quote }}
+              - name: UCX_IB_GID_INDEX
+                value: {{ .Values.ucx.gidIndex | quote }}
+              # use JobSet DNS for target discovery instead of separate Service
+              # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+              - name: TARGET_HOST
+                value: nixl-test-{{ .Values.testId }}-target-0-0.nixl-test-{{ .Values.testId }}
+              - name: TARGET_PORT
+                value: "18515"
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: RDMA_DEVICE
+                value: ""
+              # jobset index env vars
+              - name: JOB_COMPLETION_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              volumeMounts:
+              - name: nixl-test-script
+                mountPath: /opt/nixl-test
+                readOnly: true
+              - name: dshm
+                mountPath: /dev/shm
+            volumes:
+            - name: nixl-test-script
+              configMap:
+                name: nixl-test-script-{{ .Values.testId }}
+                defaultMode: 493
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 4Gi

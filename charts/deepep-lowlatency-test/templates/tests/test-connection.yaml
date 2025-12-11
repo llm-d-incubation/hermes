@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-test-connection"
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepep-lowlatency-test
+    test-id: {{ .Values.testId | quote }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: busybox:latest
+    command:
+    - sh
+    - -c
+    - |
+      echo "Testing DeepEP low-latency test deployment..."
+      echo "Checking if master service exists..."
+      nslookup deepep-lowlatency-master-{{ .Values.testId }}.{{ .Values.namespace }}.svc.cluster.local || exit 1
+      echo "Service lookup successful!"
+      echo "Test passed!"

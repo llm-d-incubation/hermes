@@ -237,6 +237,7 @@ impl ClusterAnalyzer {
                 None
             },
             topology_rule_error,
+            roce_config: None, // only populated by scan-roce command
         })
     }
 

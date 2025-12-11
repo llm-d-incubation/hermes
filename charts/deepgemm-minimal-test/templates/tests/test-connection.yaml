@@ -1,0 +1,47 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-test-connection"
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepgemm-minimal-test
+    test-id: "{{ .Values.testId }}"
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: bitnami/kubectl:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Testing DeepGEMM Minimal Test deployment..."
+
+      # wait for jobs to complete
+      echo "Waiting for node1 job to complete..."
+      kubectl wait --for=condition=complete --timeout=300s \
+        -n {{ .Values.namespace }} \
+        job/deepgemm-minimal-node1-{{ .Values.testId }} || exit 1
+
+      echo "Waiting for node2 job to complete..."
+      kubectl wait --for=condition=complete --timeout=300s \
+        -n {{ .Values.namespace }} \
+        job/deepgemm-minimal-node2-{{ .Values.testId }} || exit 1
+
+      # check for success messages in logs
+      echo "Checking node1 logs for success..."
+      kubectl logs -n {{ .Values.namespace }} \
+        -l app=deepgemm-minimal-test,role=node1,test-id={{ .Values.testId }} \
+        | grep -q "All availability tests passed" || exit 1
+
+      echo "Checking node2 logs for success..."
+      kubectl logs -n {{ .Values.namespace }} \
+        -l app=deepgemm-minimal-test,role=node2,test-id={{ .Values.testId }} \
+        | grep -q "All availability tests passed" || exit 1
+
+      echo "DeepGEMM minimal test completed successfully on both nodes!"
+      exit 0

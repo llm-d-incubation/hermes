@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-test-connection"
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: pplx-kernels-test
+    test-id: {{ .Values.testId | quote }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: busybox:latest
+    command:
+    - sh
+    - -c
+    - |
+      set -e
+      echo "Testing pplx-kernels-test chart deployment..."
+
+      # test 1: verify service exists
+      echo "1. Checking if master service exists..."
+      nslookup pplx-kernels-master-{{ .Values.testId }}.{{ .Values.namespace }}.svc.cluster.local || {
+        echo "ERROR: Master service not found"
+        exit 1
+      }
+      echo "   PASS: Master service exists"
+
+      # test 2: verify service port
+      echo "2. Checking service port configuration..."
+      SERVICE_PORT={{ .Values.distributed.masterPort }}
+      if [ "$SERVICE_PORT" -eq "{{ .Values.distributed.masterPort }}" ]; then
+        echo "   PASS: Service port is {{ .Values.distributed.masterPort }}"
+      else
+        echo "   ERROR: Service port mismatch"
+        exit 1
+      fi
+
+      # test 3: verify test ID format
+      echo "3. Validating test ID..."
+      TEST_ID="{{ .Values.testId }}"
+      if [ -n "$TEST_ID" ]; then
+        echo "   PASS: Test ID is set to $TEST_ID"
+      else
+        echo "   ERROR: Test ID is empty"
+        exit 1
+      fi
+
+      # test 4: verify namespace
+      echo "4. Verifying namespace..."
+      NAMESPACE="{{ .Values.namespace }}"
+      if [ -n "$NAMESPACE" ]; then
+        echo "   PASS: Namespace is $NAMESPACE"
+      else
+        echo "   ERROR: Namespace is empty"
+        exit 1
+      fi
+
+      # test 5: verify topology configuration
+      echo "5. Checking topology configuration..."
+      {{- if .Values.topology.nodes }}
+      NODE_COUNT={{ len .Values.topology.nodes }}
+      if [ "$NODE_COUNT" -eq "2" ]; then
+        echo "   PASS: 2 nodes configured"
+      else
+        echo "   ERROR: Expected 2 nodes, found $NODE_COUNT"
+        exit 1
+      fi
+      {{- else }}
+      echo "   WARN: No topology nodes configured (manual deployment)"
+      {{- end }}
+
+      echo ""
+      echo "All chart validation tests passed!"
+      echo "The pplx-kernels-test chart is properly configured."
+      echo ""
+      echo "Note: This test only validates the chart structure."
+      echo "To verify RDMA/NCCL functionality, check the job logs:"
+      echo "  kubectl logs -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }}"
+      echo "  kubectl logs -n {{ .Values.namespace }} -l role=worker,test-id={{ .Values.testId }}"

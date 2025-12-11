@@ -1,0 +1,76 @@
+{{- if and .Values.etcd.enabled .Values.etcd.deploy }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nixl-kvbench-etcd-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-kvbench
+    component: etcd
+    test-id: {{ .Values.testId | quote }}
+spec:
+  ports:
+  - port: 2379
+    name: client
+  - port: 2380
+    name: peer
+  selector:
+    app: nixl-kvbench
+    component: etcd
+    test-id: {{ .Values.testId | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nixl-kvbench-etcd-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-kvbench
+    component: etcd
+    test-id: {{ .Values.testId | quote }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nixl-kvbench
+      component: etcd
+      test-id: {{ .Values.testId | quote }}
+  template:
+    metadata:
+      labels:
+        app: nixl-kvbench
+        component: etcd
+        test-id: {{ .Values.testId | quote }}
+    spec:
+      containers:
+      - name: etcd
+        image: {{ .Values.etcd.image }}
+        command:
+        - etcd
+        - --name=nixl-etcd
+        - --data-dir=/var/etcd/data
+        - --listen-client-urls=http://0.0.0.0:2379
+        - --advertise-client-urls=http://nixl-kvbench-etcd-{{ .Values.testId }}:2379
+        - --listen-peer-urls=http://0.0.0.0:2380
+        - --initial-advertise-peer-urls=http://nixl-kvbench-etcd-{{ .Values.testId }}:2380
+        - --initial-cluster=nixl-etcd=http://nixl-kvbench-etcd-{{ .Values.testId }}:2380
+        ports:
+        - containerPort: 2379
+          name: client
+        - containerPort: 2380
+          name: peer
+        volumeMounts:
+        - name: data
+          mountPath: /var/etcd/data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: data
+        emptyDir: {}
+{{- end }}

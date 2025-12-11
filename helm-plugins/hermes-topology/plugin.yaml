@@ -1,0 +1,12 @@
+name: "hermes"
+version: "0.1.0"
+usage: "Inject cluster topology from Hermes into Helm values"
+description: |-
+  Uses hermes select-nodes to analyze cluster topology and select optimal
+  nodes for RDMA workloads, then injects the topology configuration into
+  Helm values before installing or upgrading a release.
+
+  Example:
+    helm hermes install my-release ./nixl-transfer-test --num-nodes 2 --ib-only
+    helm hermes upgrade my-release ./nixl-transfer-test --total-gpus 64
+command: "hermes helm-plugin"

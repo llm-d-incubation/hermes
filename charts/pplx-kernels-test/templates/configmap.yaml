@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pplx-kernels-scripts-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: pplx-kernels-test
+    test-id: {{ .Values.testId | quote }}
+data:
+  master-entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    echo "Starting pplx-kernels all-to-all benchmark (MASTER) on node ${NODE_NAME}"
+
+    echo "GPU information:"
+    nvidia-smi -L
+
+    GPU_COUNT=$(nvidia-smi -L | wc -l)
+    echo "Detected $GPU_COUNT GPUs"
+
+    echo "Cloning pplx-kernels repository..."
+    cd /tmp
+    git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
+    cd pplx-kernels
+
+    echo "Installing pytest to /tmp..."
+    pip install --target=/tmp pytest --quiet
+    export PYTHONPATH=/tmp:$PYTHONPATH
+
+    TOTAL_GPUS=$((GPU_COUNT * 2))
+    DP_SIZE={{ .Values.benchmark.dpSize }}
+    echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank 0-$((GPU_COUNT-1)))"
+
+    export MASTER_ADDR=pplx-kernels-master-${TEST_ID}
+    export MASTER_PORT={{ .Values.distributed.masterPort }}
+    export WORLD_SIZE=$TOTAL_GPUS
+    export WORLD_LOCAL_SIZE=$GPU_COUNT
+    export NODE_RANK=0
+    export RANK=0
+    export LOCAL_RANK=0
+
+    python -m tests.bench_all_to_all --dp-size $DP_SIZE
+
+    echo "pplx-kernels benchmark completed successfully"
+
+  worker-entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    echo "Starting pplx-kernels all-to-all benchmark (WORKER) on node ${NODE_NAME}"
+
+    echo "GPU information:"
+    nvidia-smi -L
+
+    GPU_COUNT=$(nvidia-smi -L | wc -l)
+    echo "Detected $GPU_COUNT GPUs"
+
+    echo "Cloning pplx-kernels repository..."
+    cd /tmp
+    git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
+    cd pplx-kernels
+
+    echo "Installing pytest to /tmp..."
+    pip install --target=/tmp pytest --quiet
+    export PYTHONPATH=/tmp:$PYTHONPATH
+
+    {{- if .Values.benchmark.waitForWorker }}
+    echo "Waiting for master to be ready..."
+    until getent hosts "pplx-kernels-master-${TEST_ID}"; do
+      echo "Waiting for master service..."
+      sleep 2
+    done
+    sleep 5
+    {{- end }}
+
+    TOTAL_GPUS=$((GPU_COUNT * 2))
+    DP_SIZE={{ .Values.benchmark.dpSize }}
+    echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank $GPU_COUNT-$((TOTAL_GPUS-1)))"
+
+    export MASTER_ADDR=pplx-kernels-master-${TEST_ID}
+    export MASTER_PORT={{ .Values.distributed.masterPort }}
+    export WORLD_SIZE=$TOTAL_GPUS
+    export WORLD_LOCAL_SIZE=$GPU_COUNT
+    export NODE_RANK=1
+    export RANK=$GPU_COUNT
+    export LOCAL_RANK=0
+
+    python -m tests.bench_all_to_all --dp-size $DP_SIZE
+
+    echo "pplx-kernels benchmark completed successfully"

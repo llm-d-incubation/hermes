@@ -1,0 +1,97 @@
+# Default values for nixl-transfer-test
+# These will be overridden by hermes select-nodes --format helm-values
+
+# test configuration
+testId: "manual-test"  # unique identifier for this test run
+namespace: default  # kubernetes namespace for test resources
+activeDeadlineSeconds: 180  # maximum time for jobs to complete (3 minutes)
+ttlSecondsAfterFinished: 300  # auto-cleanup JobSet after completion (5 minutes)
+
+# exclusive placement for topology-aware scheduling (optional)
+# when set, JobSet ensures each job gets exclusive access to its topology domain
+# exclusivePlacement:
+#   topologyKey: kubernetes.io/hostname  # or topology.kubernetes.io/zone, etc.
+
+# container image with NIXL, UCX, and CUDA support
+# this image must include:
+# - NIXL library (ai-dynamo/nixl)
+# - UCX (Unified Communication X) for RDMA
+# - CUDA/GPU drivers
+# - PyTorch
+image: ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd
+
+# python interpreter path (image-specific)
+# - llm-d-cuda-dev: /opt/vllm/bin/python3
+# - rhaiis/cuda-ubi9: /opt/app-root/bin/python3
+pythonPath: /opt/vllm/bin/python3
+
+# resource requests for RDMA and GPU
+resources:
+  # RDMA resource name (platform-specific)
+  # examples: rdma/ib (InfiniBand), rdma/roce_gdr (RoCE), networking.gke.io.networks/rdma-vpc0
+  rdma: rdma/ib
+
+  # GPU resource name (usually nvidia.com/gpu for NVIDIA GPUs)
+  gpu: nvidia.com/gpu
+
+  # resource requests (guaranteed allocation)
+  requests:
+    memory: 2Gi  # minimum memory
+    cpu: "1"  # minimum CPU cores
+
+  # resource limits (maximum allowed)
+  limits:
+    memory: 4Gi  # maximum memory
+    cpu: "2"  # maximum CPU cores
+
+# UCX (Unified Communication X) configuration for RDMA transport
+ucx:
+  # log verbosity: error, warn, info, debug, trace
+  logLevel: info
+
+  # comma-separated list of transports to use
+  # - rc: reliable connection (IB native)
+  # - ud: unreliable datagram (IB native)
+  # - dc: dynamic connection (IB native)
+  # - tcp: fallback for non-RDMA
+  # - cuda_copy, cuda_ipc: GPU-GPU transfers
+  # - gdr_copy: GPUDirect RDMA
+  transports: rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy
+
+  # GID (Global Identifier) index for RDMA
+  # - "0": default for InfiniBand
+  # - "3": often required for RoCE v2
+  gidIndex: "0"
+
+# topology configuration - automatically injected by hermes select-nodes
+# this section describes the cluster topology and selected node pair
+topology:
+  # list of nodes selected for the test (always 2 nodes)
+  nodes:
+    - name: node1  # first node (target/server)
+      gpus: 8  # number of GPUs on this node
+      rank: 0  # rank in the test (0 = target)
+      topologyBlock: unknown  # platform-specific grouping (e.g., leafgroup, fabric domain, zone)
+    - name: node2  # second node (initiator/client)
+      gpus: 8  # number of GPUs on this node
+      rank: 1  # rank in the test (1 = initiator)
+      topologyBlock: unknown  # platform-specific grouping
+
+  # aggregated topology summary
+  summary:
+    totalNodes: 2  # total nodes in test (always 2)
+    totalGpus: 16  # total GPUs across all nodes
+    gpusPerNode: 8  # average GPUs per node
+    worldSize: 16  # total GPU count (used for distributed training context)
+
+  # RDMA type detected on these nodes
+  rdmaType: rdma/ib  # examples: rdma/ib, rdma/roce_gdr, networking.gke.io.networks/rdma-vpc0
+
+  # platform detected by hermes
+  # options: CoreWeave, GKE, OpenShift, Generic
+  platform: Generic
+
+  # whether both nodes are in the same topology block
+  # true = optimal placement for local RDMA fabric testing
+  # false = cross-block testing (may have higher latency)
+  allSameBlock: false

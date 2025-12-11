@@ -1,0 +1,126 @@
+# Default values for deepep-internode-test
+# These will be overridden by hermes select-nodes --format helm-values
+
+# test configuration
+testId: "manual-test"  # unique identifier for this test run
+namespace: default  # kubernetes namespace for test resources
+activeDeadlineSeconds: 600  # maximum time for jobs to complete (10 minutes)
+ttlSecondsAfterFinished: 300  # auto-cleanup JobSet resources 5 minutes after completion
+
+# exclusive placement for topology-aware scheduling (optional)
+# when set, JobSet ensures each job gets exclusive access to its topology domain
+# exclusivePlacement:
+#   topologyKey: kubernetes.io/hostname  # or topology.kubernetes.io/zone, etc.
+
+# container image with DeepEP, NCCL, NVSHMEM, and CUDA support
+# this image must include:
+# - DeepEP library (deepseek-ai/DeepEP)
+# - NCCL (NVIDIA Collective Communications Library)
+# - NVSHMEM (NVIDIA Symmetric Hierarchical Memory)
+# - UCX (Unified Communication X) for RDMA
+# - CUDA/GPU drivers
+# - PyTorch
+image: ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd
+
+# resource requests for RDMA and GPU
+resources:
+  # RDMA resource name (platform-specific)
+  # examples: rdma/ib (InfiniBand), rdma/roce_gdr (RoCE), networking.gke.io.networks/rdma-vpc0
+  rdma: rdma/ib
+
+  # number of RDMA devices per pod (typically 2 for dual-HCA setups)
+  rdmaQuantity: "2"
+
+  # GPU resource name (usually nvidia.com/gpu for NVIDIA GPUs)
+  gpu: nvidia.com/gpu
+
+  # number of GPUs per pod (1, 2, 4, or 8)
+  gpuCount: 8
+
+  # resource requests (guaranteed allocation)
+  requests:
+    memory: 32Gi  # minimum memory per pod
+    cpu: "16"  # minimum CPU cores per pod
+
+  # resource limits (maximum allowed)
+  limits:
+    memory: 64Gi  # maximum memory per pod
+    cpu: "32"  # maximum CPU cores per pod
+
+# UCX (Unified Communication X) configuration for RDMA transport
+ucx:
+  # log verbosity: error, warn, info, debug, trace
+  logLevel: info
+
+  # comma-separated list of transports to use
+  # - rc: reliable connection (IB native)
+  # - ud: unreliable datagram (IB native)
+  # - dc: dynamic connection (IB native)
+  # - tcp: fallback for non-RDMA
+  # - cuda_copy, cuda_ipc: GPU-GPU transfers
+  # - gdr_copy: GPUDirect RDMA
+  transports: rc,ud,dc,tcp,cuda_copy,cuda_ipc,gdr_copy
+
+  # GID (Global Identifier) index for RDMA
+  # - "0": default for InfiniBand
+  # - "3": often required for RoCE v2
+  gidIndex: "0"
+
+# DeepEP test configuration
+deepep:
+  # world size (number of nodes participating)
+  worldSize: 2
+
+  # test parameters
+  numTokens: 512
+  hidden: 2048
+  numTopk: 4
+  numExperts: 32
+
+  # rendezvous backend for distributed coordination
+  # - torchrun: uses master service for rendezvous (default)
+  rendezvous:
+    backend: torchrun
+    masterPort: 29500
+
+# SR-IOV network configuration (for RoCE deployments)
+# leave empty for InfiniBand
+sriov:
+  enabled: false
+  # network names will be auto-detected or can be specified:
+  # networks:
+  #   - name: rdma-network-1
+  #   - name: rdma-network-2
+
+# topology configuration - automatically injected by hermes select-nodes
+# this section describes the cluster topology and selected nodes
+topology:
+  # list of nodes selected for the test (minimum 2 nodes for internode)
+  nodes:
+    - name: node1  # first node (master/rank 0)
+      gpus: 8  # number of GPUs on this node
+      rank: 0  # rank in the test (0 = master)
+      topologyBlock: unknown  # platform-specific grouping (e.g., leafgroup, fabric domain, zone)
+    - name: node2  # second node (worker/rank 1)
+      gpus: 8  # number of GPUs on this node
+      rank: 1  # rank in the test (1 = worker)
+      topologyBlock: unknown  # platform-specific grouping
+
+  # aggregated topology summary
+  summary:
+    totalNodes: 2  # total nodes in test
+    totalGpus: 16  # total GPUs across all nodes
+    gpusPerNode: 8  # average GPUs per node
+    worldSize: 2  # number of nodes (for DeepEP WORLD_SIZE)
+
+  # RDMA type detected on these nodes
+  rdmaType: rdma/ib  # examples: rdma/ib, rdma/roce_gdr, networking.gke.io.networks/rdma-vpc0
+
+  # platform detected by hermes
+  # options: CoreWeave, GKE, OpenShift, Generic
+  platform: Generic
+
+  # whether all nodes are in the same topology block
+  # true = optimal placement for local RDMA fabric testing
+  # false = cross-block testing (may have higher latency)
+  allSameBlock: false

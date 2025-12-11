@@ -1,0 +1,58 @@
+# Default values for ib-write-bw-test
+# These will be overridden by hermes select-nodes --format helm-values
+
+# test configuration
+testId: "manual-test"  # unique identifier for this test run
+namespace: default  # kubernetes namespace for test resources
+activeDeadlineSeconds: 120  # maximum time for jobs to complete (2 minutes)
+ttlSecondsAfterFinished: 300  # auto-cleanup JobSet after completion (5 minutes)
+
+# container image with perftest tools (ib_write_bw, etc.)
+image: quay.io/wseaton/netdebug:latest
+
+# resource requests for RDMA
+resources:
+  # RDMA resource name (platform-specific)
+  # examples: rdma/ib (InfiniBand), rdma/roce_gdr (RoCE)
+  rdma: rdma/ib
+
+  # resource requests (guaranteed allocation)
+  requests:
+    memory: 512Mi
+    cpu: "1"
+
+  # resource limits (maximum allowed)
+  limits:
+    memory: 1Gi
+    cpu: "2"
+
+# ib_write_bw test parameters
+perftest:
+  # message size for testing (-s flag)
+  messageSize: 65536  # 64KB
+  # number of iterations (-n flag)
+  iterations: 5000
+  # extra flags to pass to ib_write_bw
+  extraFlags: ""
+
+# topology configuration - automatically injected by hermes select-nodes
+topology:
+  nodes:
+    - name: node1  # server node
+      gpus: 0
+      rank: 0
+      topologyBlock: unknown
+    - name: node2  # client node
+      gpus: 0
+      rank: 1
+      topologyBlock: unknown
+
+  summary:
+    totalNodes: 2
+    totalGpus: 0
+    gpusPerNode: 0
+    worldSize: 2
+
+  rdmaType: rdma/ib
+  platform: Generic
+  allSameBlock: false

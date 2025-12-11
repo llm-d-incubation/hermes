@@ -1,0 +1,256 @@
+{{- /*
+JobSet-based PPLX kernels test - replaces separate master-job.yaml and worker-job.yaml
+Uses JobSet for coordinated multi-pod workloads with built-in DNS and startup ordering
+*/ -}}
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: pplx-kernels-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: pplx-kernels-test
+    test-id: {{ .Values.testId | quote }}
+    {{- if .Values.topology }}
+    platform: {{ .Values.topology.platform }}
+    rdma-type: {{ .Values.topology.rdmaType | replace "/" "-" | quote }}
+    {{- end }}
+spec:
+  # auto-cleanup after completion
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished | default 300 }}
+
+  # enable DNS hostnames for pod discovery
+  # pods addressable as: pplx-kernels-<testId>-<replicatedJobName>-<jobIndex>-<podIndex>.<subdomain>
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+
+  # designate master-0-0 as the coordinator pod
+  coordinator:
+    replicatedJob: master
+    jobIndex: 0
+    podIndex: 0
+
+  # failure policy - fail fast on any job failure
+  failurePolicy:
+    maxRestarts: 0
+
+  # success requires all jobs to complete
+  successPolicy:
+    operator: All
+
+  replicatedJobs:
+  # master (rank 0) - runs first, coordinates the distributed test
+  - name: master
+    replicas: 1
+    template:
+      metadata:
+        labels:
+          app: pplx-kernels-test
+          role: master
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriov }}
+        {{- if .Values.sriov.enabled }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+        {{- end }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: pplx-kernels-test
+              role: master
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriov }}
+            {{- if .Values.sriov.enabled }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+            {{- end }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.topology.nodes }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ (index .Values.topology.nodes 0).name | quote }}
+            {{- end }}
+            volumes:
+            - name: scripts
+              configMap:
+                name: pplx-kernels-scripts-{{ .Values.testId }}
+                defaultMode: 0755
+            containers:
+            - name: pplx-kernels-master
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/pplx-test/master-entrypoint.sh"]
+              volumeMounts:
+              - name: scripts
+                mountPath: /opt/pplx-test
+              resources:
+                requests:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: TEST_ID
+                value: {{ .Values.testId | quote }}
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: POD_NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              # NCCL configuration
+              - name: NCCL_DEBUG
+                value: {{ .Values.distributed.nccl.debug | quote }}
+              - name: NCCL_IB_DISABLE
+                value: {{ .Values.distributed.nccl.ibDisable | quote }}
+              - name: NCCL_IB_GID_INDEX
+                value: {{ .Values.distributed.nccl.ibGidIndex | quote }}
+              - name: NCCL_IB_TC
+                value: {{ .Values.distributed.nccl.ibTc | quote }}
+              {{- if .Values.distributed.nccl.socketIfname }}
+              - name: NCCL_SOCKET_IFNAME
+                value: {{ .Values.distributed.nccl.socketIfname | quote }}
+              {{- end }}
+              - name: NCCL_MIN_NRINGS
+                value: {{ .Values.distributed.nccl.minNrings | quote }}
+              - name: NCCL_MAX_NRINGS
+                value: {{ .Values.distributed.nccl.maxNrings | quote }}
+              - name: NCCL_BUFFSIZE
+                value: {{ .Values.distributed.nccl.buffsize | quote }}
+
+  # worker (rank 1) - waits for master to be ready, then joins the distributed test
+  - name: worker
+    replicas: 1
+    # wait for master to be ready before starting
+    dependsOn:
+    - name: master
+      status: Ready
+    template:
+      metadata:
+        labels:
+          app: pplx-kernels-test
+          role: worker
+          test-id: {{ .Values.testId | quote }}
+        {{- if .Values.sriov }}
+        {{- if .Values.sriov.enabled }}
+        annotations:
+          k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+        {{- end }}
+        {{- end }}
+      spec:
+        activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              app: pplx-kernels-test
+              role: worker
+              test-id: {{ .Values.testId | quote }}
+            {{- if .Values.sriov }}
+            {{- if .Values.sriov.enabled }}
+            annotations:
+              k8s.v1.cni.cncf.io/networks: 'multi-nic-compute'
+            {{- end }}
+            {{- end }}
+          spec:
+            restartPolicy: Never
+            {{- if .Values.imagePullSecrets }}
+            imagePullSecrets:
+            {{- range .Values.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if gt (len .Values.topology.nodes) 1 }}
+            nodeSelector:
+              kubernetes.io/hostname: {{ (index .Values.topology.nodes 1).name | quote }}
+            {{- end }}
+            volumes:
+            - name: scripts
+              configMap:
+                name: pplx-kernels-scripts-{{ .Values.testId }}
+                defaultMode: 0755
+            containers:
+            - name: pplx-kernels-worker
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/opt/pplx-test/worker-entrypoint.sh"]
+              volumeMounts:
+              - name: scripts
+                mountPath: /opt/pplx-test
+              resources:
+                requests:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+                  memory: {{ .Values.resources.requests.memory }}
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                limits:
+                  {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+                  {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+                  memory: {{ .Values.resources.limits.memory }}
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+              env:
+              - name: TEST_ID
+                value: {{ .Values.testId | quote }}
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: POD_NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              # NCCL configuration
+              - name: NCCL_DEBUG
+                value: {{ .Values.distributed.nccl.debug | quote }}
+              - name: NCCL_IB_DISABLE
+                value: {{ .Values.distributed.nccl.ibDisable | quote }}
+              - name: NCCL_IB_GID_INDEX
+                value: {{ .Values.distributed.nccl.ibGidIndex | quote }}
+              - name: NCCL_IB_TC
+                value: {{ .Values.distributed.nccl.ibTc | quote }}
+              {{- if .Values.distributed.nccl.socketIfname }}
+              - name: NCCL_SOCKET_IFNAME
+                value: {{ .Values.distributed.nccl.socketIfname | quote }}
+              {{- end }}
+              - name: NCCL_MIN_NRINGS
+                value: {{ .Values.distributed.nccl.minNrings | quote }}
+              - name: NCCL_MAX_NRINGS
+                value: {{ .Values.distributed.nccl.maxNrings | quote }}
+              - name: NCCL_BUFFSIZE
+                value: {{ .Values.distributed.nccl.buffsize | quote }}

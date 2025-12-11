@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nixl-kvbench-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nixl-kvbench
+    test-id: {{ .Values.testId | quote }}
+    {{- if .Values.topology }}
+    platform: {{ .Values.topology.platform }}
+    rdma-type: {{ .Values.topology.rdmaType | replace "/" "-" | quote }}
+    {{- end }}
+spec:
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: nixl-kvbench
+        test-id: {{ .Values.testId | quote }}
+      {{- if .Values.sriov }}
+      {{- if .Values.sriov.enabled }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: {{ .Values.sriov.network | quote }}
+      {{- end }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range .Values.imagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- if .Values.topology.nodes }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.topology.nodes 0).name | quote }}
+      {{- end }}
+      volumes:
+      - name: scripts
+        configMap:
+          name: nixl-kvbench-{{ .Values.testId }}
+          defaultMode: 0755
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
+      containers:
+      - name: kvbench
+        image: {{ .Values.image }}
+        command: ["/bin/bash", "/opt/kvbench/entrypoint.sh"]
+        volumeMounts:
+        - name: scripts
+          mountPath: /opt/kvbench
+        - name: shm
+          mountPath: /dev/shm
+        resources:
+          requests:
+            {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+            {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
+            {{ .Values.resources.gpu }}: {{ .Values.resources.gpuCount | default 1 | quote }}
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        env:
+        - name: TEST_ID
+          value: {{ .Values.testId | quote }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # UCX configuration
+        - name: UCX_LOG_LEVEL
+          value: {{ .Values.ucx.logLevel | quote }}
+        - name: UCX_TLS
+          value: {{ .Values.ucx.transports | quote }}
+        - name: UCX_IB_GID_INDEX
+          value: {{ .Values.ucx.gidIndex | quote }}
+        {{- if .Values.etcd.enabled }}
+        - name: ETCD_ENDPOINTS
+          value: {{ .Values.etcd.endpoint | quote }}
+        {{- end }}

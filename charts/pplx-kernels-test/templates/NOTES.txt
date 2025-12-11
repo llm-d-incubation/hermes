@@ -1,0 +1,94 @@
+PPLX Kernels Distributed GPU Test
+Test ID: {{ .Values.testId }}
+Namespace: {{ .Values.namespace }}
+
+This test runs the PPLX kernels all-to-all benchmark across two nodes using NCCL for inter-GPU communication.
+
+DEPLOYED RESOURCES:
+-------------------
+- Service: pplx-kernels-master-{{ .Values.testId }}
+  Port: {{ .Values.distributed.masterPort }} (distributed coordination)
+
+- Master Job: pplx-kernels-master-{{ .Values.testId }}
+  {{- if .Values.topology.nodes }}
+  Node: {{ (index .Values.topology.nodes 0).name }}
+  {{- end }}
+  Role: Rank 0 (master)
+
+- Worker Job: pplx-kernels-worker-{{ .Values.testId }}
+  {{- if gt (len .Values.topology.nodes) 1 }}
+  Node: {{ (index .Values.topology.nodes 1).name }}
+  {{- end }}
+  Role: Rank 1 (worker)
+
+- ConfigMap: pplx-kernels-scripts-{{ .Values.testId }}
+  Contains: master-entrypoint.sh, worker-entrypoint.sh
+
+TEST CONFIGURATION:
+------------------
+{{- if .Values.topology }}
+Platform: {{ .Values.topology.platform }}
+RDMA Type: {{ .Values.topology.rdmaType }}
+Total GPUs: {{ .Values.topology.summary.totalGpus }}
+Nodes: {{ .Values.topology.summary.totalNodes }}
+Same Topology Block: {{ .Values.topology.allSameBlock }}
+{{- end }}
+
+Distributed Backend: {{ .Values.distributed.backend }}
+Master Port: {{ .Values.distributed.masterPort }}
+Data Parallel Size: {{ .Values.benchmark.dpSize }}
+Active Deadline: {{ .Values.activeDeadlineSeconds }}s
+
+NCCL Configuration:
+- Debug Level: {{ .Values.distributed.nccl.debug }}
+- IB Enabled: {{ eq .Values.distributed.nccl.ibDisable "0" }}
+- GID Index: {{ .Values.distributed.nccl.ibGidIndex }}
+- Traffic Class: {{ .Values.distributed.nccl.ibTc }}
+
+MONITOR TEST EXECUTION:
+----------------------
+# Watch both jobs
+kubectl get jobs -n {{ .Values.namespace }} -l test-id={{ .Values.testId }} -w
+
+# Check master logs
+kubectl logs -n {{ .Values.namespace }} -l role=master,test-id={{ .Values.testId }} -f
+
+# Check worker logs
+kubectl logs -n {{ .Values.namespace }} -l role=worker,test-id={{ .Values.testId }} -f
+
+# Check all pods
+kubectl get pods -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+CLEANUP:
+--------
+# Delete all test resources
+helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+# Or manually delete resources
+kubectl delete jobs,services,configmaps -n {{ .Values.namespace }} -l test-id={{ .Values.testId }}
+
+TROUBLESHOOTING:
+---------------
+# Describe master job
+kubectl describe job pplx-kernels-master-{{ .Values.testId }} -n {{ .Values.namespace }}
+
+# Describe worker job
+kubectl describe job pplx-kernels-worker-{{ .Values.testId }} -n {{ .Values.namespace }}
+
+# Check service endpoints
+kubectl get endpoints pplx-kernels-master-{{ .Values.testId }} -n {{ .Values.namespace }}
+
+# Verify RDMA resources
+kubectl describe node {{ if .Values.topology.nodes }}{{ (index .Values.topology.nodes 0).name }}{{ end }}
+
+EXPECTED OUTPUT:
+---------------
+The benchmark will:
+1. Clone pplx-kernels from GitHub
+2. Install pytest dependencies
+3. Detect GPUs on each node
+4. Establish distributed communication via NCCL
+5. Run all-to-all communication benchmark
+6. Report throughput and latency metrics
+
+Success indicates RDMA/NCCL is properly configured for multi-node GPU communication.

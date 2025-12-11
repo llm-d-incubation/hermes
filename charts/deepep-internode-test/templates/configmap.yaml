@@ -1,0 +1,436 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deepep-internode-script-{{ .Values.testId }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: deepep-internode-test
+    test-id: {{ .Values.testId | quote }}
+data:
+  master-entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    echo "Starting DeepEP internode test (MASTER) on node ${NODE_NAME}"
+
+    echo "GPU information:"
+    nvidia-smi -L
+
+    echo "GPU_COUNT from environment: $GPU_COUNT"
+
+    # source and run diagnostics
+    source /opt/deepep-test/diagnostics.sh
+    print_rdma_diagnostics
+
+    # detect and configure RDMA devices
+    detect_dual_rdma_devices
+
+    if [ -n "$NET1_RDMA_DEVICE" ]; then
+      export UCX_NET_DEVICES="${ALL_RDMA_DEVICES:-$NET1_RDMA_DEVICE:1}"
+      export NVSHMEM_ENABLE_NIC_PE_MAPPING="1"
+      export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME="${NET1_INTERFACE:-net1}"
+
+      echo "=== RDMA Configuration ==="
+      echo "  UCX devices: $UCX_NET_DEVICES"
+      echo "  NVSHMEM bootstrap: ${NET1_INTERFACE:-net1}"
+      echo "=========================="
+    else
+      echo "WARNING: No RDMA devices detected, using defaults"
+    fi
+
+    echo "Cloning DeepEP repository..."
+    cd /tmp
+    git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
+    cd DeepEP
+    git checkout {{ .Values.deepep.version | default "v1.2.1" }}
+
+    echo "Running DeepEP internode test with $GPU_COUNT processes per node, $WORLD_SIZE nodes total..."
+    # use JobSet DNS for master pod discovery
+    # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+    export MASTER_ADDR=deepep-internode-${TEST_ID}-master-0-0.deepep-internode-${TEST_ID}
+    export MASTER_PORT={{ .Values.deepep.rendezvous.masterPort }}
+    export RANK=0
+    export PYTHONUNBUFFERED=1
+
+    # determine if we need low-latency compatibility mode
+    TOTAL_RANKS=$((GPU_COUNT * WORLD_SIZE))
+    if [ $TOTAL_RANKS -le 8 ]; then
+      echo "Total ranks ($TOTAL_RANKS) <= 8, enabling --test-ll-compatibility to bypass NVL peer check"
+      LL_FLAG="--test-ll-compatibility"
+    else
+      LL_FLAG=""
+    fi
+
+    echo "Starting Python test (uses internal mp.spawn)..."
+    echo "Command: python tests/test_internode.py --num-processes $GPU_COUNT --num-tokens $NUM_TOKENS --hidden $HIDDEN --num-topk $NUM_TOPK --num-experts $NUM_EXPERTS $LL_FLAG"
+
+    python -u tests/test_internode.py \
+      --num-processes "$GPU_COUNT" \
+      --num-tokens "$NUM_TOKENS" \
+      --hidden "$HIDDEN" \
+      --num-topk "$NUM_TOPK" \
+      --num-experts "$NUM_EXPERTS" \
+      $LL_FLAG 2>&1 | tee /tmp/test_output.log
+
+    TEST_EXIT_CODE=${PIPESTATUS[0]}
+    echo "Test exited with code: $TEST_EXIT_CODE"
+
+    if [ $TEST_EXIT_CODE -eq 0 ]; then
+      echo "DeepEP internode test completed successfully"
+    else
+      echo "DeepEP internode test FAILED with exit code $TEST_EXIT_CODE"
+      tail -50 /tmp/test_output.log
+      exit $TEST_EXIT_CODE
+    fi
+
+  worker-entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    echo "Starting DeepEP internode test (WORKER rank $RANK) on node ${NODE_NAME}"
+
+    echo "GPU information:"
+    nvidia-smi -L
+
+    echo "GPU_COUNT from environment: $GPU_COUNT"
+
+    # source and run diagnostics
+    source /opt/deepep-test/diagnostics.sh
+    print_rdma_diagnostics
+
+    # detect and configure RDMA devices
+    detect_dual_rdma_devices
+
+    if [ -n "$NET1_RDMA_DEVICE" ]; then
+      export UCX_NET_DEVICES="${ALL_RDMA_DEVICES:-$NET1_RDMA_DEVICE:1}"
+      export NVSHMEM_ENABLE_NIC_PE_MAPPING="1"
+      export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME="${NET1_INTERFACE:-net1}"
+
+      echo "=== RDMA Configuration ==="
+      echo "  UCX devices: $UCX_NET_DEVICES"
+      echo "  NVSHMEM bootstrap: ${NET1_INTERFACE:-net1}"
+      echo "=========================="
+    else
+      echo "WARNING: No RDMA devices detected, using defaults"
+    fi
+
+    echo "Cloning DeepEP repository..."
+    cd /tmp
+    git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
+    cd DeepEP
+    git checkout {{ .Values.deepep.version | default "v1.2.1" }}
+
+    # JobSet's dependsOn ensures master is Ready before worker starts
+    # add small delay for master to fully initialize torchrun rendezvous
+    echo "Waiting for master to fully initialize torchrun rendezvous..."
+    sleep 5
+
+    echo "Running DeepEP internode test with $GPU_COUNT processes per node, $WORLD_SIZE nodes total..."
+    # use JobSet DNS for master pod discovery
+    # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
+    export MASTER_ADDR=deepep-internode-${TEST_ID}-master-0-0.deepep-internode-${TEST_ID}
+    export MASTER_PORT={{ .Values.deepep.rendezvous.masterPort }}
+    export PYTHONUNBUFFERED=1
+
+    # determine if we need low-latency compatibility mode
+    TOTAL_RANKS=$((GPU_COUNT * WORLD_SIZE))
+    if [ $TOTAL_RANKS -le 8 ]; then
+      echo "Total ranks ($TOTAL_RANKS) <= 8, enabling --test-ll-compatibility to bypass NVL peer check"
+      LL_FLAG="--test-ll-compatibility"
+    else
+      LL_FLAG=""
+    fi
+
+    echo "Starting Python test (uses internal mp.spawn)..."
+    echo "Command: python tests/test_internode.py --num-processes $GPU_COUNT --num-tokens $NUM_TOKENS --hidden $HIDDEN --num-topk $NUM_TOPK --num-experts $NUM_EXPERTS $LL_FLAG"
+
+    python -u tests/test_internode.py \
+      --num-processes "$GPU_COUNT" \
+      --num-tokens "$NUM_TOKENS" \
+      --hidden "$HIDDEN" \
+      --num-topk "$NUM_TOPK" \
+      --num-experts "$NUM_EXPERTS" \
+      $LL_FLAG 2>&1 | tee /tmp/test_output.log
+
+    TEST_EXIT_CODE=${PIPESTATUS[0]}
+    echo "Test exited with code: $TEST_EXIT_CODE"
+
+    if [ $TEST_EXIT_CODE -eq 0 ]; then
+      echo "DeepEP internode test completed successfully"
+    else
+      echo "DeepEP internode test FAILED with exit code $TEST_EXIT_CODE"
+      tail -50 /tmp/test_output.log
+      exit $TEST_EXIT_CODE
+    fi
+
+  diagnostics.sh: |
+    #!/bin/bash
+    # shared RDMA diagnostics script
+
+    # enumerate all physical RDMA NICs on the node
+    enumerate_physical_rdma_nics() {
+      echo ""
+      echo "========================================="
+      echo "  PHYSICAL RDMA NIC ENUMERATION"
+      echo "========================================="
+
+      # count physical NICs (p0-p15 on bare metal, net1-* via multi-nic CNI)
+      local physical_nics
+      physical_nics=$(find /sys/class/net/ -maxdepth 1 -type l \( -name 'p[0-9]*' -o -name 'net1-[0-9]*' \) -print0 2>/dev/null | xargs -0 -n1 basename | sort -V)
+      local nic_count
+      nic_count=$(echo "$physical_nics" | wc -l)
+
+      echo "Found $nic_count physical RDMA NICs:"
+      echo ""
+
+      # detailed mapping
+      echo "NIC -> RDMA Device -> PCI Address -> Status"
+      echo "-------------------------------------------"
+
+      for nic in $physical_nics; do
+        if [ -d "/sys/class/net/$nic" ]; then
+          # get PCI address
+          local pci
+          pci=$(readlink -f "/sys/class/net/$nic/device" 2>/dev/null | xargs basename)
+
+          # find matching RDMA device
+          local rdma_dev=""
+          for dev in /sys/class/infiniband/*; do
+            if [ -d "$dev" ]; then
+              local dev_name
+              dev_name=$(basename "$dev")
+              local dev_pci
+              dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
+              if [ "$dev_pci" = "$pci" ]; then
+                rdma_dev="$dev_name"
+                break
+              fi
+            fi
+          done
+
+          # get link status
+          local status="DOWN"
+          if [ -f "/sys/class/net/$nic/operstate" ]; then
+            local operstate
+            operstate=$(cat "/sys/class/net/$nic/operstate" 2>/dev/null)
+            if [ "$operstate" = "up" ]; then
+              status="UP"
+            fi
+          fi
+
+          printf "%-4s -> %-10s -> %s -> %s\n" "$nic" "${rdma_dev:-N/A}" "$pci" "$status"
+        fi
+      done
+
+      echo ""
+      echo "Total Physical RDMA NICs: $nic_count"
+
+      # count GPUs
+      local gpu_count
+      gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l)
+      echo "Total GPUs: $gpu_count"
+
+      if [ "$gpu_count" -gt 0 ] && [ "$nic_count" -gt 0 ]; then
+        local nics_per_gpu=$((nic_count / gpu_count))
+        echo "NICs per GPU: $nics_per_gpu"
+      fi
+
+      echo "========================================="
+      echo ""
+    }
+
+    # returns the RDMA device name that corresponds to SR-IOV interface
+    get_sriov_rdma_device() {
+      local iface="${SRIOV_INTERFACE:-net1}"
+
+      if [ -d "/sys/class/net/$iface" ]; then
+        local iface_pci
+        iface_pci=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null | xargs basename)
+        for dev in /sys/class/infiniband/*; do
+          if [ -d "$dev" ]; then
+            dev_name=$(basename "$dev")
+            dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
+            if [ "$dev_pci" = "$iface_pci" ]; then
+              echo "$dev_name"
+              return 0
+            fi
+          fi
+        done
+      fi
+      return 1
+    }
+
+    # detects RDMA devices for both net1 and net2 interfaces
+    detect_dual_rdma_devices() {
+      echo "Detecting RDMA devices for network interfaces..."
+
+      # check for SR-IOV VF mode (net1, net2)
+      if [ -d "/sys/class/net/net1" ] && [ -d "/sys/class/net/net2" ]; then
+        echo "  Mode: SR-IOV VF (net1, net2)"
+        NET1_INTERFACE="net1"
+        NET2_INTERFACE="net2"
+      # check for multi-nic-compute mode (net1-0, net1-1, ...)
+      elif [ -d "/sys/class/net/net1-0" ] && [ -d "/sys/class/net/net1-1" ]; then
+        echo "  Mode: multi-nic-compute (net1-0, net1-1, ...)"
+        NET1_INTERFACE="net1-0"
+        NET2_INTERFACE="net1-1"
+
+        # gather all RDMA devices and filter for ones with valid GIDs
+        local all_rdma_devs=()
+        mapfile -t all_rdma_devs < <(find /sys/class/infiniband/ -maxdepth 1 -type l -name 'mlx*' -print0 2>/dev/null | xargs -0 -n1 basename | sort -V)
+        local usable_devs=()
+        local unusable_devs=()
+
+        for dev in "${all_rdma_devs[@]}"; do
+          local has_valid_gid=0
+          if [ -d "/sys/class/infiniband/$dev/ports/1/gids" ]; then
+            for gid_file in /sys/class/infiniband/$dev/ports/1/gids/*; do
+              if [ -f "$gid_file" ]; then
+                local gid
+                gid=$(cat "$gid_file" 2>/dev/null)
+                if [ -n "$gid" ] && [ "$gid" != "0000:0000:0000:0000:0000:0000:0000:0000" ]; then
+                  has_valid_gid=1
+                  break
+                fi
+              fi
+            done
+          fi
+
+          if [ $has_valid_gid -eq 1 ]; then
+            usable_devs+=("$dev")
+          else
+            unusable_devs+=("$dev")
+          fi
+        done
+
+        if [ "${#usable_devs[@]}" -ge 2 ]; then
+          NET1_RDMA_DEVICE="${usable_devs[0]}"
+          NET2_RDMA_DEVICE="${usable_devs[1]}"
+
+          if [ "${#unusable_devs[@]}" -gt 0 ]; then
+            EXCLUDED_RDMA_DEVICES=$(printf "%s:1," "${unusable_devs[@]}")
+            EXCLUDED_RDMA_DEVICES="${EXCLUDED_RDMA_DEVICES%,}"
+          fi
+
+          ALL_RDMA_DEVICES=$(printf "%s:1," "${usable_devs[@]}")
+          ALL_RDMA_DEVICES="${ALL_RDMA_DEVICES%,}"
+
+          echo "  Detected ${#all_rdma_devs[@]} total RDMA devices (${#usable_devs[@]} usable)"
+          echo "  Usable devices: ${usable_devs[*]}"
+        fi
+
+        if [ -z "$NET1_RDMA_DEVICE" ] || [ -z "$NET2_RDMA_DEVICE" ]; then
+          echo "WARNING: Could not detect RDMA devices in multi-nic mode"
+          return 1
+        fi
+        return 0
+      # fallback to single interface mode
+      elif [ -d "/sys/class/net/net1" ]; then
+        echo "  Mode: single interface (net1 only)"
+        NET1_INTERFACE="net1"
+        NET2_INTERFACE="net1"
+      else
+        echo "WARNING: No supported network interface mode found, using fallback"
+        # just find any RDMA device
+        for dev in /sys/class/infiniband/*; do
+          if [ -d "$dev" ]; then
+            NET1_RDMA_DEVICE=$(basename "$dev")
+            NET2_RDMA_DEVICE=$NET1_RDMA_DEVICE
+            echo "  Fallback: using $NET1_RDMA_DEVICE"
+            return 0
+          fi
+        done
+        return 1
+      fi
+
+      # detect rdma device for first interface (SR-IOV VF mode)
+      if [ -d "/sys/class/net/$NET1_INTERFACE" ] && [ -z "$NET1_RDMA_DEVICE" ]; then
+        local net1_pci
+        net1_pci=$(readlink -f "/sys/class/net/$NET1_INTERFACE/device" 2>/dev/null | xargs basename)
+        for dev in /sys/class/infiniband/*; do
+          if [ -d "$dev" ]; then
+            dev_name=$(basename "$dev")
+            dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
+            if [ "$dev_pci" = "$net1_pci" ]; then
+              NET1_RDMA_DEVICE="$dev_name"
+              echo "  $NET1_INTERFACE -> $NET1_RDMA_DEVICE (PCI: $net1_pci)"
+              break
+            fi
+          fi
+        done
+      fi
+
+      # detect rdma device for second interface
+      if [ -d "/sys/class/net/$NET2_INTERFACE" ] && [ -z "$NET2_RDMA_DEVICE" ]; then
+        local net2_pci
+        net2_pci=$(readlink -f "/sys/class/net/$NET2_INTERFACE/device" 2>/dev/null | xargs basename)
+        for dev in /sys/class/infiniband/*; do
+          if [ -d "$dev" ]; then
+            dev_name=$(basename "$dev")
+            dev_pci=$(readlink -f "$dev/device" 2>/dev/null | xargs basename)
+            if [ "$dev_pci" = "$net2_pci" ]; then
+              NET2_RDMA_DEVICE="$dev_name"
+              echo "  $NET2_INTERFACE -> $NET2_RDMA_DEVICE (PCI: $net2_pci)"
+              break
+            fi
+          fi
+        done
+      fi
+
+      if [ -z "$NET1_RDMA_DEVICE" ] || [ -z "$NET2_RDMA_DEVICE" ]; then
+        echo "WARNING: Could not detect RDMA devices, using any available"
+        for dev in /sys/class/infiniband/*; do
+          if [ -d "$dev" ]; then
+            NET1_RDMA_DEVICE=$(basename "$dev")
+            NET2_RDMA_DEVICE=$NET1_RDMA_DEVICE
+            echo "  Using fallback device: $NET1_RDMA_DEVICE"
+            break
+          fi
+        done
+      fi
+
+      return 0
+    }
+
+    print_rdma_diagnostics() {
+      echo ""
+      echo "=== RDMA Device Diagnostics ==="
+      echo "Network interfaces:"
+      ip addr show | grep -E "^[0-9]+:|inet "
+
+      echo ""
+      echo "InfiniBand/RoCE devices:"
+      ls -la /sys/class/infiniband/ 2>/dev/null || echo "No IB devices found"
+
+      echo ""
+      echo "RDMA device details:"
+      for dev in /sys/class/infiniband/*; do
+        if [ -d "$dev" ]; then
+          dev_name=$(basename "$dev")
+          echo "Device: $dev_name"
+
+          if [ -d "$dev/ports/1/gids" ]; then
+            echo "  GID table (port 1):"
+            for i in {0..5}; do
+              if [ -f "$dev/ports/1/gids/$i" ]; then
+                gid=$(cat "$dev/ports/1/gids/$i" 2>/dev/null || echo "error")
+                echo "    [$i] $gid"
+              fi
+            done
+          fi
+
+          if [ -d "$dev/device/net" ]; then
+            netdev=$(ls "$dev/device/net" 2>/dev/null | head -1)
+            if [ -n "$netdev" ]; then
+              echo "  Network interface: $netdev"
+              ip addr show "$netdev" 2>/dev/null | grep -E "inet |link/ether"
+            fi
+          fi
+          echo ""
+        fi
+      done
+
+      echo "UCX environment variables:"
+      env | grep UCX || echo "No UCX env vars set"
+
+      echo "=== End Diagnostics ==="
+      echo ""
+    }

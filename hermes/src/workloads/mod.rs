@@ -1,165 +1,32 @@
-use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose};
-use minijinja::value::{Object, Value};
+//! Test workload definitions for RDMA connectivity testing.
+//!
+//! Workloads are deployed via Helm charts in the `charts/` directory.
+//! The TestWorkload trait defines metadata for each workload.
+
 use serde::Serialize;
 use std::time::Duration;
-
-use crate::self_test::{NodePair, SelfTestConfig};
 
 pub mod deepep_internode;
 pub mod deepep_low_latency;
 pub mod deepgemm_minimal;
 pub mod deepgemm_simple;
+pub mod ib_write_bw;
 pub mod nixl_transfer;
 pub mod pplx_kernels;
 
-/// RDMA configuration info passed to workloads
+/// RDMA configuration info for display in manifest headers
 #[derive(Debug, Clone, Serialize)]
 pub struct RdmaInfo {
     pub rdma_resource_type: String,
     pub sriov_network: Option<String>,
-    pub sriov_network_resource: Option<String>, // full k8s resource name (e.g., openshift.io/p2rdma)
-    pub ucx_tls: String,
-    pub ucx_gid_index: String,
-}
-
-impl Object for RdmaInfo {
-    fn get_value(self: &std::sync::Arc<Self>, key: &Value) -> Option<Value> {
-        match key.as_str()? {
-            "rdma_resource_type" => Some(Value::from(self.rdma_resource_type.clone())),
-            "sriov_network" => Some(Value::from(self.sriov_network.clone())),
-            "sriov_network_resource" => Some(Value::from(self.sriov_network_resource.clone())),
-            "ucx_tls" => Some(Value::from(self.ucx_tls.clone())),
-            "ucx_gid_index" => Some(Value::from(self.ucx_gid_index.clone())),
-            _ => None,
-        }
-    }
-}
-
-/// Base template node info that most workloads need
-#[derive(Debug, Clone, Serialize)]
-pub struct TemplateNode {
-    pub name: String,
-    pub rdma_device: String,
-}
-
-/// Unified template context for all workloads
-#[derive(Debug, Clone, Serialize)]
-pub struct TemplateContext {
-    pub test_id: String,
-    pub server_node: crate::self_test::SelectedNode,
-    pub client_node: crate::self_test::SelectedNode,
-    pub selection_reason: String,
-    pub rdma_resource_type: String,
-    pub sriov_network: Option<String>,
     pub sriov_network_resource: Option<String>,
-    pub sriov_interface: String,
     pub ucx_tls: String,
     pub ucx_gid_index: String,
-    pub image: String,
-    pub request_gpu: bool,
-    pub gpu_count: u32,
-    pub namespace: String,
-    pub server_ip: String,
-    pub extra_env_vars: std::collections::HashMap<String, String>,
-    /// true if rendering for dry-run (affects ConfigMap encoding in templates)
-    pub dry_run: bool,
-    /// embedded files from manifest directory (filename -> base64 content)
-    pub configmap_files: std::collections::HashMap<String, String>,
-    /// job deadline in seconds (for activeDeadlineSeconds)
-    pub active_deadline_seconds: u64,
-    #[serde(flatten)]
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
-}
-
-impl TemplateContext {
-    pub fn new(
-        test_id: &str,
-        node_pair: &crate::self_test::NodePair,
-        config: &crate::self_test::SelfTestConfig,
-        rdma_info: &RdmaInfo,
-    ) -> Self {
-        // SR-IOV interface name (defaults to net1, Multus convention for first attachment)
-        let sriov_interface = if rdma_info.sriov_network.is_some() {
-            "net1".to_string()
-        } else {
-            "eth0".to_string() // fallback for non-SR-IOV
-        };
-
-        Self {
-            test_id: test_id.to_string(),
-            server_node: node_pair.node1.clone(),
-            client_node: node_pair.node2.clone(),
-            selection_reason: node_pair.selection_reason.clone(),
-            rdma_resource_type: rdma_info.rdma_resource_type.clone(),
-            sriov_network: rdma_info.sriov_network.clone(),
-            sriov_network_resource: rdma_info.sriov_network_resource.clone(),
-            sriov_interface,
-            ucx_tls: rdma_info.ucx_tls.clone(),
-            ucx_gid_index: rdma_info.ucx_gid_index.clone(),
-            image: config.image.clone(),
-            request_gpu: config.gpu_requirement.requires_gpu(),
-            gpu_count: config.gpus_per_node.unwrap_or(1),
-            namespace: config.namespace.clone(),
-            server_ip: String::new(), // to be set by workload with set_server_service()
-            dry_run: config.execution_mode.is_dry_run(),
-            extra_env_vars: std::collections::HashMap::new(),
-            configmap_files: std::collections::HashMap::new(),
-            active_deadline_seconds: 300, // default 5 minutes
-            extra: std::collections::HashMap::new(),
-        }
-    }
-
-    /// set the server service name (used for TARGET_HOST)
-    pub fn with_server_service(mut self, service_name: &str) -> Self {
-        self.server_ip = format!("{}.{}.svc.cluster.local", service_name, self.namespace);
-        self
-    }
-
-    /// load embedded files for a workload and add to configmap_files
-    pub fn with_embedded_files(mut self, workload_name: &str) -> Self {
-        let files = crate::embedded_files::get_configmap_data(workload_name);
-
-        if files.is_empty() {
-            tracing::warn!(
-                "No embedded files found for workload '{}'. ConfigMap will be empty. \
-                 This may cause the workload to fail at runtime.",
-                workload_name
-            );
-        } else {
-            tracing::debug!(
-                "Loaded {} embedded file(s) for workload '{}'",
-                files.len(),
-                workload_name
-            );
-        }
-
-        self.configmap_files = files;
-        self
-    }
-
-    /// add extra context variables
-    pub fn with_extra(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
-        self.extra.insert(key.into(), value);
-        self
-    }
-
-    /// add environment variables
-    pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.extra_env_vars.insert(key.into(), value.into());
-        self
-    }
-
-    /// set active deadline in seconds
-    pub fn with_active_deadline(mut self, deadline: Duration) -> Self {
-        self.active_deadline_seconds = deadline.as_secs();
-        self
-    }
 }
 
 /// Trait that all test workloads must implement
 pub trait TestWorkload: Send + Sync {
-    /// Unique identifier for this test
+    /// Unique identifier for this test (must match Helm chart name in charts/)
     fn name(&self) -> &str;
 
     /// Human-readable description
@@ -170,20 +37,13 @@ pub trait TestWorkload: Send + Sync {
 
     /// Number of GPUs required per node (0 if no GPU requirement)
     fn required_gpus_per_node(&self) -> u32 {
-        0 // default: no GPU requirement
+        0
     }
 
-    /// Success criteria for validation
-    fn success_criteria(&self) -> Vec<String>;
-
-    /// Render the Kubernetes manifest for this test
-    fn render_manifest(
-        &self,
-        test_id: &str,
-        node_pair: &NodePair,
-        config: &SelfTestConfig,
-        rdma_info: &RdmaInfo,
-    ) -> Result<String>;
+    /// Default container image for this workload (overrides CLI default if Some)
+    fn default_image(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Registry of all available test workloads
@@ -195,46 +55,11 @@ pub fn get_all_workloads() -> Vec<Box<dyn TestWorkload>> {
         Box::new(pplx_kernels::PplxKernelsTest),
         Box::new(deepep_internode::DeepEpInternodeTest),
         Box::new(deepep_low_latency::DeepEpLowLatencyTest),
+        Box::new(ib_write_bw::IbWriteBwTest),
     ]
 }
 
 /// Get a workload by name
 pub fn get_workload_by_name(name: &str) -> Option<Box<dyn TestWorkload>> {
     get_all_workloads().into_iter().find(|w| w.name() == name)
-}
-
-// include the auto-generated common templates loader
-include!(concat!(env!("OUT_DIR"), "/common_templates.rs"));
-
-/// Create a configured minijinja Environment with custom filters for workload rendering
-pub fn create_template_environment() -> minijinja::Environment<'static> {
-    let mut env = minijinja::Environment::new();
-
-    // add decode_base64 filter for dry-run readable output
-    env.add_filter("decode_base64", decode_base64_filter);
-
-    // load all common templates from _common/ directory (auto-generated by build.rs)
-    load_common_templates(&mut env);
-
-    env
-}
-
-/// custom filter to decode base64 content
-/// returns the input unchanged if it's not valid base64
-fn decode_base64_filter(value: String) -> Result<String, minijinja::Error> {
-    match general_purpose::STANDARD.decode(&value) {
-        Ok(bytes) => {
-            // try to convert to UTF-8 string
-            String::from_utf8(bytes).map_err(|e| {
-                minijinja::Error::new(
-                    minijinja::ErrorKind::InvalidOperation,
-                    format!("base64 content is not valid UTF-8: {}", e),
-                )
-            })
-        }
-        Err(e) => Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            format!("failed to decode base64: {}", e),
-        )),
-    }
 }
