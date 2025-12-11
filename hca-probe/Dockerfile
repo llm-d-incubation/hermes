@@ -44,4 +44,4 @@ COPY --from=builder /build/target/release/hca-probe /usr/local/bin/hca-probe
 USER 1000
 
 ENTRYPOINT ["/usr/local/bin/hca-probe"]
-CMD ["--format", "shell"]
+CMD ["detect"]

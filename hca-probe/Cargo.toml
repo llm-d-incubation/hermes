@@ -1,6 +1,6 @@
 [package]
 name = "hca-probe"
-version = "0.3.0"
+version.workspace = true
 edition.workspace = true
 
 [lib]
@@ -18,7 +18,7 @@ anyhow.workspace = true
 argh = "0.1"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
-sideway = "0.4"
+sideway = { git = "https://github.com/wseaton/sideway.git", branch = "add-lid" }
 nix = { version = "0.29", default-features = false, features = ["sched", "net"] }
 
 [profile.release]

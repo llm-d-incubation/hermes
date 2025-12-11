@@ -7,16 +7,34 @@ Rust replacement for KServe's [detect roce shell script](https://github.com/red-
 ```bash
 #!/bin/bash
 # IB-only, no VFs
-eval "$(hca-probe -f env -l ib --no-vf 2>/dev/null | grep '^export')"
+eval "$(hca-probe detect -f env -l ib --no-vf 2>/dev/null | grep '^export')"
 exec "$@"
 ```
 
 ## Help
 
 ```
-Usage: hca-probe [-f <format>] [-i <socket-ifname>] [-g <gid-index>] [-p <device-prefix>] [-l <link-layer>] [--no-vf] [--namespace-pid <namespace-pid>] [--namespace-id <namespace-id>] [<command>] [<args>]
+Usage: hca-probe <command> [<args>]
 
 Detect and configure RDMA HCAs (InfiniBand and RoCE) for NCCL, NVSHMEM, and UCX
+
+Options:
+  --help, help      display usage information
+
+Commands:
+  detect            Detect RDMA HCAs and output configuration
+  iface-hca         Map network interfaces to InfiniBand HCAs
+  vf-map            Map SR-IOV Virtual Functions to Physical Functions
+  iommu-acs         Check IOMMU and PCI ACS configuration
+  iface-ip          List network interfaces with IP addresses
+```
+
+### detect
+
+```
+Usage: hca-probe detect [-f <format>] [-i <socket-ifname>] [-g <gid-index>] [-p <device-prefix>] [-l <link-layer>] [--no-vf] [--namespace-pid <namespace-pid>] [--namespace-id <namespace-id>]
+
+Detect RDMA HCAs and output configuration
 
 Options:
   -f, --format      output format: env, json, or quiet
@@ -30,11 +48,4 @@ Options:
   --namespace-pid   enter network namespace of specific PID before detection
   --namespace-id    namespace identifier for output correlation
   --help, help      display usage information
-
-Commands:
-  detect            Detect RDMA HCAs and output configuration
-  iface-hca         Map network interfaces to InfiniBand HCAs
-  vf-map            Map SR-IOV Virtual Functions to Physical Functions
-  iommu-acs         Check IOMMU and PCI ACS configuration
-  iface-ip          List network interfaces with IP addresses
 ```

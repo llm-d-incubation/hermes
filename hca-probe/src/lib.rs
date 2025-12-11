@@ -6,7 +6,6 @@ use sideway::ibverbs::{
     device_context::{Guid, LinkLayer as SidewayLinkLayer, PortState},
 };
 use std::collections::HashMap;
-use std::fs;
 use std::net::Ipv6Addr;
 use std::path::Path;
 
@@ -301,9 +300,10 @@ pub fn detect_rdma_config(
         // get node GUID from ibverbs (not sysfs)
         let node_guid = format_guid(device.guid());
 
-        // get port LID for IB devices - requires sysfs, sideway doesn't expose PortAttr.lid
+        // get port LID for IB devices (only meaningful for InfiniBand, returns 0 for RoCE)
         let port_lid = if link_layer == LinkLayer::InfiniBand {
-            get_port_lid(&name, 1)
+            let lid = port_attr.lid();
+            if lid != 0 { Some(lid) } else { None }
         } else {
             None
         };
@@ -387,25 +387,6 @@ pub fn detect_rdma_config(
     }
 
     Ok(config)
-}
-
-/// read port LID from sysfs (for InfiniBand)
-/// NOTE: libibverbs exposes this via ibv_port_attr.lid, but sideway's PortAttr
-/// wrapper doesn't expose it. consider upstreaming a PR to sideway.
-fn get_port_lid(device_name: &str, port: u8) -> Option<u16> {
-    let path = format!("/sys/class/infiniband/{}/ports/{}/lid", device_name, port);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| {
-            let trimmed = s.trim();
-            // LID can be hex (0x...) or decimal
-            if trimmed.starts_with("0x") {
-                u16::from_str_radix(&trimmed[2..], 16).ok()
-            } else {
-                trimmed.parse().ok()
-            }
-        })
-        .filter(|&lid| lid != 0)
 }
 
 /// detect if device is a Virtual Function (VF) by checking for physfn symlink

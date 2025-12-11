@@ -17,39 +17,7 @@ mod vf_map;
 #[derive(FromArgs, Debug)]
 struct Cli {
     #[argh(subcommand)]
-    command: Option<Commands>,
-
-    /// output format: env, json, or quiet
-    #[argh(option, short = 'f', default = "DetectOutputFormat::Env")]
-    format: DetectOutputFormat,
-
-    /// filter HCAs by network interface name (comma-separated)
-    #[argh(option, short = 'i')]
-    socket_ifname: Option<String>,
-
-    /// force a specific GID index (overrides auto-detection)
-    #[argh(option, short = 'g')]
-    gid_index: Option<u32>,
-
-    /// device prefix to filter (e.g., "mlx5_", "mlx4_", "bnxt_")
-    #[argh(option, short = 'p', default = "String::new()")]
-    device_prefix: String,
-
-    /// filter by link layer: ib, roce, or all
-    #[argh(option, short = 'l', default = "LinkLayerFilter::All")]
-    link_layer: LinkLayerFilter,
-
-    /// exclude SR-IOV Virtual Functions (VFs)
-    #[argh(switch)]
-    no_vf: bool,
-
-    /// enter network namespace of specific PID before detection
-    #[argh(option)]
-    namespace_pid: Option<u32>,
-
-    /// namespace identifier for output correlation
-    #[argh(option)]
-    namespace_id: Option<String>,
+    command: Commands,
 }
 
 #[derive(FromArgs, Debug)]
@@ -246,7 +214,7 @@ fn main() -> Result<()> {
     let cli: Cli = argh::from_env();
 
     match cli.command {
-        Some(Commands::Detect(cmd)) => run_detect(
+        Commands::Detect(cmd) => run_detect(
             cmd.format,
             cmd.socket_ifname,
             cmd.gid_index,
@@ -256,20 +224,10 @@ fn main() -> Result<()> {
             cmd.namespace_pid,
             cmd.namespace_id,
         ),
-        Some(Commands::IfaceHca(cmd)) => iface_hca::run(cmd.format),
-        Some(Commands::VfMap(cmd)) => vf_map::run(cmd.format),
-        Some(Commands::IommuAcs(cmd)) => iommu_acs::run(cmd.format),
-        Some(Commands::IfaceIp(cmd)) => iface_ip::run(cmd.format),
-        None => run_detect(
-            cli.format,
-            cli.socket_ifname,
-            cli.gid_index,
-            cli.device_prefix,
-            cli.link_layer,
-            cli.no_vf,
-            cli.namespace_pid,
-            cli.namespace_id,
-        ),
+        Commands::IfaceHca(cmd) => iface_hca::run(cmd.format),
+        Commands::VfMap(cmd) => vf_map::run(cmd.format),
+        Commands::IommuAcs(cmd) => iommu_acs::run(cmd.format),
+        Commands::IfaceIp(cmd) => iface_ip::run(cmd.format),
     }
 }
 
