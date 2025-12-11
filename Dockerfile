@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# multi-stage build for hermes + roce-detector: UBI9 base with RDMA support
+# multi-stage build for hermes + hca-probe: UBI9 base with RDMA support
 FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 
 # install rust toolchain and build dependencies
@@ -24,18 +24,18 @@ WORKDIR /build
 # copy workspace
 COPY Cargo.toml Cargo.lock ./
 COPY hermes ./hermes
-COPY roce-detector ./roce-detector
+COPY hca-probe ./hca-probe
 COPY charts ./charts
 
 # build both binaries
 RUN cargo build --release -p hermes && \
-    cargo build --release -p roce-detector
+    cargo build --release -p hca-probe
 
 # strip binaries
 RUN strip target/release/hermes && \
-    strip target/release/roce-detector
+    strip target/release/hca-probe
 
 # export stage for GitHub Actions
 FROM scratch AS binaries
 COPY --from=builder /build/target/release/hermes /hermes
-COPY --from=builder /build/target/release/roce-detector /roce-detector
+COPY --from=builder /build/target/release/hca-probe /hca-probe

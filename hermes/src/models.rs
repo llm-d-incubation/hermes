@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // define RoceConfig and HcaDetail types inline to avoid platform-specific dependencies
-// these match the JSON output from roce-detector binary (JsonOutput struct in main.rs)
+// these match the JSON output from hca-probe binary (JsonOutput struct in main.rs)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoceConfig {
     pub active_hcas: Vec<String>,

@@ -331,7 +331,7 @@ fn create_roce_detection_pod(pod_name: &str, node_name: &str, image: &str) -> Po
         metadata: ObjectMeta {
             name: Some(pod_name.to_string()),
             labels: Some(BTreeMap::from([
-                ("app".to_string(), "roce-detector".to_string()),
+                ("app".to_string(), "hca-probe".to_string()),
                 ("hermes-scan".to_string(), "true".to_string()),
             ])),
             ..Default::default()
@@ -442,7 +442,7 @@ echo "  {"
 echo "    \"namespace_type\": \"Host\","
 echo "    \"namespace_id\": \"host\","
 echo -n "    \"config\": "
-/usr/local/bin/roce-detector --format json 2>/dev/null || echo '{"active_hcas":[],"nccl_hcas":[],"ucx_hcas":[],"gid_index_counts":{},"hca_details":[]}'
+/usr/local/bin/hca-probe --format json 2>/dev/null || echo '{"active_hcas":[],"nccl_hcas":[],"ucx_hcas":[],"gid_index_counts":{},"hca_details":[]}'
 echo "  }"
 first_ns=false
 
@@ -481,8 +481,8 @@ if command -v crictl &> /dev/null; then
       echo "    \"pid\": $pid,"
       echo -n "    \"config\": "
 
-      # run roce-detector in this container's network namespace
-      nsenter -t "$pid" -n /usr/local/bin/roce-detector --format json 2>/dev/null || echo '{"active_hcas":[],"nccl_hcas":[],"ucx_hcas":[],"gid_index_counts":{},"hca_details":[]}'
+      # run hca-probe in this container's network namespace
+      nsenter -t "$pid" -n /usr/local/bin/hca-probe --format json 2>/dev/null || echo '{"active_hcas":[],"nccl_hcas":[],"ucx_hcas":[],"gid_index_counts":{},"hca_details":[]}'
 
       echo "  }"
     fi

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sideway::ibverbs::{
     address::{GidEntry, GidType},
     device::{self, DeviceInfo},
-    device_context::PortState,
+    device_context::{Guid, LinkLayer as SidewayLinkLayer, PortState},
 };
 use std::collections::HashMap;
 use std::fs;
@@ -30,6 +30,26 @@ impl std::fmt::Display for LinkLayer {
             LinkLayer::Ethernet => write!(f, "Ethernet"),
             LinkLayer::Unknown => write!(f, "Unknown"),
         }
+    }
+}
+
+impl From<SidewayLinkLayer> for LinkLayer {
+    fn from(ll: SidewayLinkLayer) -> Self {
+        match ll {
+            SidewayLinkLayer::InfiniBand => LinkLayer::InfiniBand,
+            SidewayLinkLayer::Ethernet => LinkLayer::Ethernet,
+            SidewayLinkLayer::Unspecified => LinkLayer::Unknown,
+        }
+    }
+}
+
+/// format a GUID, filtering out zero values
+fn format_guid(guid: Guid) -> Option<String> {
+    let s = guid.to_string();
+    if s == "0000:0000:0000:0000" {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -272,14 +292,16 @@ pub fn detect_rdma_config(
         let port_state = port_attr.port_state();
         let is_active = matches!(port_state, PortState::Active);
 
-        // get link layer from sysfs
-        let link_layer = get_link_layer(&name);
+        // get link layer from ibverbs (not sysfs)
+        let link_layer: LinkLayer = port_attr.link_layer().into();
 
-        // detect if this is a VF (Virtual Function)
+        // detect if this is a VF (Virtual Function) - requires sysfs, no ibverbs API
         let is_vf = is_virtual_function(&name);
 
-        // get node GUID and port LID for IB devices
-        let node_guid = get_node_guid(&name);
+        // get node GUID from ibverbs (not sysfs)
+        let node_guid = format_guid(device.guid());
+
+        // get port LID for IB devices - requires sysfs, sideway doesn't expose PortAttr.lid
         let port_lid = if link_layer == LinkLayer::InfiniBand {
             get_port_lid(&name, 1)
         } else {
@@ -367,29 +389,9 @@ pub fn detect_rdma_config(
     Ok(config)
 }
 
-/// read link layer type from sysfs
-fn get_link_layer(device_name: &str) -> LinkLayer {
-    let path = format!("/sys/class/infiniband/{}/ports/1/link_layer", device_name);
-    match fs::read_to_string(&path) {
-        Ok(s) => match s.trim() {
-            "InfiniBand" => LinkLayer::InfiniBand,
-            "Ethernet" => LinkLayer::Ethernet,
-            _ => LinkLayer::Unknown,
-        },
-        Err(_) => LinkLayer::Unknown,
-    }
-}
-
-/// read node GUID from sysfs
-fn get_node_guid(device_name: &str) -> Option<String> {
-    let path = format!("/sys/class/infiniband/{}/node_guid", device_name);
-    fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "0000:0000:0000:0000")
-}
-
 /// read port LID from sysfs (for InfiniBand)
+/// NOTE: libibverbs exposes this via ibv_port_attr.lid, but sideway's PortAttr
+/// wrapper doesn't expose it. consider upstreaming a PR to sideway.
 fn get_port_lid(device_name: &str, port: u8) -> Option<u16> {
     let path = format!("/sys/class/infiniband/{}/ports/{}/lid", device_name, port);
     fs::read_to_string(&path)

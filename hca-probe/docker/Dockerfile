@@ -1,5 +1,5 @@
 # ============================================================================
-# Stage 1: Rust builder for roce-detector (uses UBI9 like main Dockerfile)
+# Stage 1: Rust builder for hca-probe (uses UBI9 like main Dockerfile)
 # ============================================================================
 FROM registry.access.redhat.com/ubi9/ubi:latest AS rust-builder
 
@@ -24,13 +24,13 @@ WORKDIR /build
 # copy workspace files for building
 COPY Cargo.toml Cargo.lock ./
 COPY hermes ./hermes
-COPY roce-detector ./roce-detector
+COPY hca-probe ./hca-probe
 COPY charts ./charts
 
-# build roce-detector
-RUN cargo build --release -p roce-detector && \
-    strip target/release/roce-detector && \
-    cp target/release/roce-detector /usr/local/bin/
+# build hca-probe
+RUN cargo build --release -p hca-probe && \
+    strip target/release/hca-probe && \
+    cp target/release/hca-probe /usr/local/bin/
 
 # ============================================================================
 # Stage 2: CUDA perftest builder (from known working version)
@@ -144,18 +144,18 @@ RUN wget -qO - https://www.mellanox.com/downloads/ofed/RPM-GPG-KEY-Mellanox | gp
     rm -rf /var/lib/apt/lists/*
 
 # install system utilities
-COPY roce-detector/docker/system-packages.txt /tmp/system-packages.txt
+COPY hca-probe/docker/system-packages.txt /tmp/system-packages.txt
 RUN apt-get update && \
     apt-get install -y --no-install-recommends $(cat /tmp/system-packages.txt) && \
     rm -rf /var/lib/apt/lists/* /tmp/system-packages.txt
 
 # copy binaries from builder stages
-COPY --from=rust-builder /usr/local/bin/roce-detector /usr/local/bin/
+COPY --from=rust-builder /usr/local/bin/hca-probe /usr/local/bin/
 COPY --from=perftest-builder /usr/local/perftest-cuda/bin/* /usr/local/bin/
 
 # verify binaries
 RUN echo "Verifying binaries..." && \
-    roce-detector --help && \
+    hca-probe --help && \
     ls -lh /usr/local/bin/ib_* && \
     ldd /usr/local/bin/ib_write_bw || true
 

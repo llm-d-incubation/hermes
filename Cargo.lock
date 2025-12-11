@@ -128,6 +128,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "argh"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34ff18325c8a36b82f992e533ece1ec9f9a9db446bd1c14d4f936bac88fcd240"
+dependencies = [
+ "argh_derive",
+ "argh_shared",
+ "rust-fuzzy-search",
+]
+
+[[package]]
+name = "argh_derive"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb7b2b83a50d329d5d8ccc620f5c7064028828538bdf5646acd60dc1f767803"
+dependencies = [
+ "argh_shared",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "argh_shared"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a464143cc82dedcdc3928737445362466b7674b5db4e2eb8e869846d6d84f4f6"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -899,6 +931,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
 
 [[package]]
+name = "hca-probe"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "argh",
+ "nix",
+ "serde",
+ "serde_json",
+ "sideway",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -915,6 +961,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "hca-probe",
  "insta",
  "k8s-openapi",
  "kube",
@@ -923,7 +970,6 @@ dependencies = [
  "owo-colors",
  "prettytable-rs",
  "regex",
- "roce-detector",
  "schemars",
  "serde",
  "serde_json",
@@ -1885,18 +1931,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "roce-detector"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "clap",
- "nix",
- "serde",
- "serde_json",
- "sideway",
- "tracing",
- "tracing-subscriber",
-]
+name = "rust-fuzzy-search"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a157657054ffe556d8858504af8a672a054a6e0bd9e8ee531059100c0fa11bb2"
 
 [[package]]
 name = "rustc-demangle"
@@ -2159,9 +2197,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sideway"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "195f570816bac8c71fbd0dd8ad9154c746b7dccf7f22061b513bbcd1e1e15307"
+checksum = "de7868cbfe36185d277a6b0c1e7437cb2f31ab1524aaff08897d1f4b00d005de"
 dependencies = [
  "bitmask-enum",
  "libc",

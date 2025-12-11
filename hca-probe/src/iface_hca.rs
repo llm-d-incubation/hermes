@@ -4,9 +4,10 @@
 use crate::OutputFormat;
 use crate::sysfs;
 use anyhow::{Context, Result};
-use roce_detector::LinkLayer;
+use hca_probe::LinkLayer;
 use serde::Serialize;
 use sideway::ibverbs::device::{self, DeviceInfo};
+use sideway::ibverbs::device_context::LinkLayer as SidewayLinkLayer;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
@@ -44,6 +45,13 @@ pub fn run(format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+/// info collected per-HCA from ibverbs
+struct HcaInfo {
+    port_state: String,
+    link_layer: LinkLayer,
+    node_guid: Option<String>,
+}
+
 fn collect_mappings() -> Result<IfaceHcaOutput> {
     // get authoritative HCA info from ibverbs
     let device_list = device::DeviceList::new()
@@ -51,8 +59,7 @@ fn collect_mappings() -> Result<IfaceHcaOutput> {
 
     // build netdev -> (HCA name, port state, link layer) mapping from ibverbs
     let mut netdev_to_hca: HashMap<String, (String, String, LinkLayer)> = HashMap::new();
-    let mut hca_states: HashMap<String, String> = HashMap::new();
-    let mut hca_link_layers: HashMap<String, LinkLayer> = HashMap::new();
+    let mut hca_info_map: HashMap<String, HcaInfo> = HashMap::new();
 
     for device in &device_list {
         let name = device.name();
@@ -62,15 +69,27 @@ fn collect_mappings() -> Result<IfaceHcaOutput> {
             Err(_) => continue,
         };
 
-        let port_state = ctx
-            .query_port(1)
-            .map(|p| format!("{:?}", p.port_state()))
-            .unwrap_or_else(|_| "Unknown".to_string());
+        let port_attr = match ctx.query_port(1) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
-        let link_layer = get_link_layer(&name);
+        let port_state = format!("{:?}", port_attr.port_state());
 
-        hca_states.insert(name.to_string(), port_state.clone());
-        hca_link_layers.insert(name.to_string(), link_layer);
+        // get link layer from ibverbs (not sysfs)
+        let link_layer: LinkLayer = convert_link_layer(port_attr.link_layer());
+
+        // get node GUID from ibverbs (not sysfs)
+        let node_guid = format_guid(device.guid());
+
+        hca_info_map.insert(
+            name.to_string(),
+            HcaInfo {
+                port_state: port_state.clone(),
+                link_layer,
+                node_guid,
+            },
+        );
 
         // get netdevs from GID table (only for Ethernet/RoCE devices)
         if let Ok(gid_entries) = ctx.query_gid_table() {
@@ -100,7 +119,7 @@ fn collect_mappings() -> Result<IfaceHcaOutput> {
 
     // for each interface that has an HCA
     for (netdev, (hca_name, port_state, link_layer)) in &netdev_to_hca {
-        let is_vf = vf_set.contains(netdev);
+        let is_vf = vf_set.contains(netdev.as_str());
         matched_hcas.insert(hca_name.clone());
 
         mappings.push(IfaceHcaMapping {
@@ -116,16 +135,16 @@ fn collect_mappings() -> Result<IfaceHcaOutput> {
     mappings.sort_by(|a, b| natural_sort_cmp(&a.interface, &b.interface));
 
     // find InfiniBand HCAs (these don't have netdev mappings, that's normal)
-    let infiniband_hcas: Vec<InfiniBandHca> = hca_states
+    let infiniband_hcas: Vec<InfiniBandHca> = hca_info_map
         .iter()
-        .filter(|(name, _)| {
-            !matched_hcas.contains(*name)
-                && hca_link_layers.get(*name) == Some(&LinkLayer::InfiniBand)
+        .filter(|(name, info)| {
+            !matched_hcas.contains(*name) && info.link_layer == LinkLayer::InfiniBand
         })
-        .map(|(name, state)| InfiniBandHca {
+        .map(|(name, info)| InfiniBandHca {
             name: name.clone(),
-            port_state: state.clone(),
-            node_guid: get_node_guid(name),
+            port_state: info.port_state.clone(),
+            node_guid: info.node_guid.clone(),
+            // LID requires sysfs - sideway doesn't expose PortAttr.lid
             port_lid: get_port_lid(name, 1),
         })
         .collect();
@@ -136,26 +155,26 @@ fn collect_mappings() -> Result<IfaceHcaOutput> {
     })
 }
 
-fn get_link_layer(device_name: &str) -> LinkLayer {
-    let path = format!("/sys/class/infiniband/{}/ports/1/link_layer", device_name);
-    match fs::read_to_string(&path) {
-        Ok(s) => match s.trim() {
-            "InfiniBand" => LinkLayer::InfiniBand,
-            "Ethernet" => LinkLayer::Ethernet,
-            _ => LinkLayer::Unknown,
-        },
-        Err(_) => LinkLayer::Unknown,
+fn convert_link_layer(ll: SidewayLinkLayer) -> LinkLayer {
+    match ll {
+        SidewayLinkLayer::InfiniBand => LinkLayer::InfiniBand,
+        SidewayLinkLayer::Ethernet => LinkLayer::Ethernet,
+        SidewayLinkLayer::Unspecified => LinkLayer::Unknown,
     }
 }
 
-fn get_node_guid(device_name: &str) -> Option<String> {
-    let path = format!("/sys/class/infiniband/{}/node_guid", device_name);
-    fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "0000:0000:0000:0000")
+fn format_guid(guid: sideway::ibverbs::device_context::Guid) -> Option<String> {
+    let s = guid.to_string();
+    if s == "0000:0000:0000:0000" {
+        None
+    } else {
+        Some(s)
+    }
 }
 
+/// read port LID from sysfs (for InfiniBand)
+/// NOTE: libibverbs exposes this via ibv_port_attr.lid, but sideway's PortAttr
+/// wrapper doesn't expose it. consider upstreaming a PR to sideway.
 fn get_port_lid(device_name: &str, port: u8) -> Option<u16> {
     let path = format!("/sys/class/infiniband/{}/ports/{}/lid", device_name, port);
     fs::read_to_string(&path)

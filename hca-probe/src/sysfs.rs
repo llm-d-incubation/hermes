@@ -13,12 +13,6 @@ pub fn is_virtual_function(device_path: &Path) -> bool {
     device_path.join("physfn").is_symlink()
 }
 
-/// check if an InfiniBand HCA is a VF
-pub fn is_ib_device_vf(device_name: &str) -> bool {
-    let path = Path::new(IB_CLASS).join(device_name).join("device");
-    path.is_symlink() && is_virtual_function(&path)
-}
-
 /// info about a network interface from sysfs
 #[derive(Debug, Clone)]
 pub struct NetInterface {

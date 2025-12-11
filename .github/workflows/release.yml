@@ -34,11 +34,11 @@ jobs:
           name: hermes-linux-amd64
           path: dist/hermes
 
-      - name: Upload roce-detector artifact
+      - name: Upload hca-probe artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roce-detector-linux-amd64
-          path: dist/roce-detector
+          name: hca-probe-linux-amd64
+          path: dist/hca-probe
 
   build-macos:
     name: Build ${{ matrix.target }}
@@ -111,10 +111,10 @@ jobs:
             fi
           done
 
-          # copy roce-detector binary (Linux only)
-          if [ -d "artifacts/roce-detector-linux-amd64" ]; then
-            cp "artifacts/roce-detector-linux-amd64/roce-detector" "release/roce-detector-linux-amd64"
-            chmod +x "release/roce-detector-linux-amd64"
+          # copy hca-probe binary (Linux only)
+          if [ -d "artifacts/hca-probe-linux-amd64" ]; then
+            cp "artifacts/hca-probe-linux-amd64/hca-probe" "release/hca-probe-linux-amd64"
+            chmod +x "release/hca-probe-linux-amd64"
           fi
 
       - name: Create Release

@@ -131,8 +131,8 @@ enum Commands {
         #[arg(long)]
         rdma_only: bool,
 
-        /// Container image for RoCE detection pods
-        #[arg(long, default_value = "quay.io/wseaton/roce-detector:latest")]
+        /// Container image for HCA probe pods
+        #[arg(long, default_value = "quay.io/wseaton/hca-probe:latest")]
         image: String,
 
         /// Namespace to deploy detection pods

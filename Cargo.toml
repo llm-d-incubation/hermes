@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "hermes",
-    "roce-detector",
+    "hca-probe",
 ]
 
 [workspace.package]

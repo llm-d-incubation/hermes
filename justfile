@@ -97,8 +97,8 @@ tag-release:
     git tag -a "${TAG}" -m "Release ${TAG}"
     echo "✅ Tag ${TAG} created. Push with: git push origin ${TAG}"
 
-# build roce-detector docker image
-build-roce-detector tag="latest":
+# build hca-probe docker image
+build-hca-probe tag="latest":
     #!/usr/bin/env bash
     set -e
 
@@ -112,19 +112,19 @@ build-roce-detector tag="latest":
         exit 1
     fi
 
-    echo "Building roce-detector with ${CONTAINER_CMD}..."
-    cd roce-detector/roce-detector
-    ${CONTAINER_CMD} build -t quay.io/wseaton/roce-detector:{{tag}} .
+    echo "Building hca-probe with ${CONTAINER_CMD}..."
+    cd hca-probe
+    ${CONTAINER_CMD} build -t quay.io/wseaton/hca-probe:{{tag}} .
 
     # also tag as latest if a version tag was specified
     if [ "{{tag}}" != "latest" ]; then
-        ${CONTAINER_CMD} tag quay.io/wseaton/roce-detector:{{tag}} quay.io/wseaton/roce-detector:latest
+        ${CONTAINER_CMD} tag quay.io/wseaton/hca-probe:{{tag}} quay.io/wseaton/hca-probe:latest
     fi
 
-    echo "✅ Image built: quay.io/wseaton/roce-detector:{{tag}}"
+    echo "✅ Image built: quay.io/wseaton/hca-probe:{{tag}}"
 
-# push roce-detector docker image
-push-roce-detector tag="latest":
+# push hca-probe docker image
+push-hca-probe tag="latest":
     #!/usr/bin/env bash
     set -e
 
@@ -138,16 +138,16 @@ push-roce-detector tag="latest":
         exit 1
     fi
 
-    echo "Pushing roce-detector:{{tag}} to quay.io..."
-    ${CONTAINER_CMD} push quay.io/wseaton/roce-detector:{{tag}}
+    echo "Pushing hca-probe:{{tag}} to quay.io..."
+    ${CONTAINER_CMD} push quay.io/wseaton/hca-probe:{{tag}}
 
     # if pushing a version tag, also push latest
     if [ "{{tag}}" != "latest" ]; then
-        echo "Pushing roce-detector:latest to quay.io..."
-        ${CONTAINER_CMD} push quay.io/wseaton/roce-detector:latest
+        echo "Pushing hca-probe:latest to quay.io..."
+        ${CONTAINER_CMD} push quay.io/wseaton/hca-probe:latest
     fi
 
-    echo "✅ Image pushed: quay.io/wseaton/roce-detector:{{tag}}"
+    echo "✅ Image pushed: quay.io/wseaton/hca-probe:{{tag}}"
 
-# build and push roce-detector docker image
-build-push-roce-detector tag="latest": (build-roce-detector tag) (push-roce-detector tag)
+# build and push hca-probe docker image
+build-push-hca-probe tag="latest": (build-hca-probe tag) (push-hca-probe tag)
