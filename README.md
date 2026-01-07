@@ -15,19 +15,19 @@ Download the latest release for your platform:
 
 ```bash
 # macOS (Apple Silicon)
-curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-aarch64-apple-darwin.tar.gz
-tar xzf hermes-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/llm-d-incubation/hermes/releases/latest/download/hermes-darwin-arm64.tar.gz
+tar xzf hermes-darwin-arm64.tar.gz
 sudo mv hermes /usr/local/bin/
 
 # macOS (Intel)
-curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-x86_64-apple-darwin.tar.gz
-tar xzf hermes-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/llm-d-incubation/hermes/releases/latest/download/hermes-darwin-amd64.tar.gz
+tar xzf hermes-darwin-amd64.tar.gz
 sudo mv hermes /usr/local/bin/
 
 # Linux (x86_64)
-curl -LO https://github.com/llm-d-incubation/hermes/releases/download/v0.1.0/hermes-x86_64-unknown-linux-gnu.tar.gz
-tar xzf hermes-x86_64-unknown-linux-gnu.tar.gz
-sudo mv hermes /usr/local/bin/
+curl -LO https://github.com/llm-d-incubation/hermes/releases/latest/download/hermes-linux-amd64.tar.gz
+tar xzf hermes-linux-amd64.tar.gz
+sudo mv hermes hca-probe /usr/local/bin/
 ```
 
 ### From Source
