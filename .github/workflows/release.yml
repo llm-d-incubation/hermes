@@ -13,13 +13,13 @@ jobs:
     name: Build Linux (UBI9)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build and export binaries
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -29,13 +29,13 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Upload hermes artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hermes-linux-amd64
           path: dist/hermes
 
       - name: Upload hca-probe artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hca-probe-linux-amd64
           path: dist/hca-probe
@@ -52,7 +52,7 @@ jobs:
             asset_name: hermes-darwin-arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -60,19 +60,19 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
@@ -81,7 +81,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} -p hermes
 
       - name: Upload hermes artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset_name }}
           path: target/${{ matrix.target }}/release/hermes
@@ -91,34 +91,38 @@ jobs:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
+          merge-multiple: false
 
       - name: Prepare release assets
         run: |
           mkdir -p release
 
-          # copy hermes binaries
-          for dir in artifacts/hermes-*; do
+          # Linux tarball: include both hermes and hca-probe
+          if [ -d "artifacts/hermes-linux-amd64" ] && [ -d "artifacts/hca-probe-linux-amd64" ]; then
+            mkdir -p tmp/linux
+            cp artifacts/*linux-amd64/* tmp/linux/
+            chmod +x tmp/linux/*
+            tar -czf "release/hermes-linux-amd64.tar.gz" -C tmp/linux .
+            rm -rf tmp/linux
+          fi
+
+          # macOS tarballs: hermes only
+          for dir in artifacts/hermes-darwin-*; do
             if [ -d "$dir" ]; then
               asset_name=$(basename "$dir")
-              cp "$dir/hermes" "release/$asset_name"
-              chmod +x "release/$asset_name"
+              chmod +x "$dir/hermes"
+              tar -czf "release/${asset_name}.tar.gz" -C "$dir" hermes
             fi
           done
 
-          # copy hca-probe binary (Linux only)
-          if [ -d "artifacts/hca-probe-linux-amd64" ]; then
-            cp "artifacts/hca-probe-linux-amd64/hca-probe" "release/hca-probe-linux-amd64"
-            chmod +x "release/hca-probe-linux-amd64"
-          fi
-
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: false
