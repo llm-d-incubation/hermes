@@ -7,12 +7,20 @@ namespace: default  # kubernetes namespace for test resources
 activeDeadlineSeconds: 300  # maximum time for jobs to complete (5 minutes)
 ttlSecondsAfterFinished: 300  # auto-cleanup JobSet after completion (5 minutes)
 
-# container image with DeepGEMM, PyTorch, and CUDA support
-# this image must include:
-# - DeepGEMM library (ai-dynamo/DeepGEMM)
-# - PyTorch with CUDA support
-# - CUDA/GPU drivers
+# container image - must have PyTorch with CUDA and FP8 support
+# deep_gemm is JIT-compiled from source, so no pre-install needed
 image: ghcr.io/llm-d/llm-d-cuda-dev:sha-d58731d@sha256:ba067a81b28546650a5496c3093a21b249c3f0c60d0d305ddcd1907e632e6edd
+
+# optional pull secrets for private registries
+imagePullSecrets: []
+
+# DeepGEMM test configuration
+deepgemm:
+  # git version to checkout (tag, branch, or SHA)
+  version: "v2.1.1"
+  # test file to run from the DeepGEMM repo (relative to repo root)
+  # v2.1.x: tests/test_fp8.py, main: tests/test_fp8_fp4.py
+  testFile: "tests/test_fp8.py"
 
 # resource requests for GPU compute
 resources:
