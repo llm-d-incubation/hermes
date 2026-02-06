@@ -88,6 +88,10 @@ spec:
               configMap:
                 name: pplx-kernels-scripts-{{ .Values.testId }}
                 defaultMode: 0755
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
             containers:
             - name: pplx-kernels-master
               image: {{ .Values.image }}
@@ -95,6 +99,8 @@ spec:
               volumeMounts:
               - name: scripts
                 mountPath: /opt/pplx-test
+              - name: dshm
+                mountPath: /dev/shm
               resources:
                 requests:
                   {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}
@@ -198,6 +204,10 @@ spec:
               configMap:
                 name: pplx-kernels-scripts-{{ .Values.testId }}
                 defaultMode: 0755
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
             containers:
             - name: pplx-kernels-worker
               image: {{ .Values.image }}
@@ -205,6 +215,8 @@ spec:
               volumeMounts:
               - name: scripts
                 mountPath: /opt/pplx-test
+              - name: dshm
+                mountPath: /dev/shm
               resources:
                 requests:
                   {{ .Values.resources.rdma }}: {{ .Values.resources.rdmaQuantity | default "1" | quote }}

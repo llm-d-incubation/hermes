@@ -432,7 +432,15 @@ pub fn select_nodes_from_report(
         selection_reason,
     };
 
-    let rdma_type = selected[0].rdma_resource.clone();
+    // rdma_resource format is "resource_type: quantity" (e.g., "rdma/ib: Quantity("64")")
+    // extract just the resource name for use as rdma_type
+    let rdma_type = selected[0]
+        .rdma_resource
+        .split(':')
+        .next()
+        .unwrap_or(&selected[0].rdma_resource)
+        .trim()
+        .to_string();
     let platform = format!("{:?}", report.platform_type);
 
     Ok(NodeSelection {

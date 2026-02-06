@@ -1075,22 +1075,28 @@ async fn run_helm_plugin(raw_args: Vec<String>) -> Result<()> {
     let mut config = Config::infer().await?;
 
     // apply helm environment variable overrides
-    // helm sets these when global flags are used (e.g., --kube-apiserver, --kube-insecure-skip-tls-verify, etc.)
-    if let Ok(api_server) = std::env::var("HELM_KUBEAPISERVER") {
+    // helm always sets these env vars (even as empty strings), so filter on non-empty
+    if let Ok(api_server) = std::env::var("HELM_KUBEAPISERVER")
+        && !api_server.is_empty()
+    {
         if is_debug {
             eprintln!("DEBUG: Using HELM_KUBEAPISERVER: {}", api_server);
         }
         config.cluster_url = api_server.parse()?;
     }
 
-    if let Ok(token) = std::env::var("HELM_KUBETOKEN") {
+    if let Ok(token) = std::env::var("HELM_KUBETOKEN")
+        && !token.is_empty()
+    {
         if is_debug {
             eprintln!("DEBUG: Using HELM_KUBETOKEN for authentication");
         }
         config.auth_info.token = Some(token.into());
     }
 
-    if let Ok(ca_file) = std::env::var("HELM_KUBECAFILE") {
+    if let Ok(ca_file) = std::env::var("HELM_KUBECAFILE")
+        && !ca_file.is_empty()
+    {
         if is_debug {
             eprintln!("DEBUG: Using HELM_KUBECAFILE: {}", ca_file);
         }
@@ -1098,10 +1104,17 @@ async fn run_helm_plugin(raw_args: Vec<String>) -> Result<()> {
     }
 
     // check TLS skip verify from multiple sources
-    if std::env::var("HELM_KUBEINSECURE_SKIP_TLS_VERIFY").is_ok()
-        || std::env::var("KUBE_INSECURE_TLS").is_ok()
-        || std::env::var("KUBERNETES_INSECURE_TLS").is_ok()
-    {
+    // helm sets HELM_KUBEINSECURE_SKIP_TLS_VERIFY to "false" by default, so check the value
+    let tls_skip = std::env::var("HELM_KUBEINSECURE_SKIP_TLS_VERIFY")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
+        || std::env::var("KUBE_INSECURE_TLS")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        || std::env::var("KUBERNETES_INSECURE_TLS")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+    if tls_skip {
         if is_debug {
             eprintln!("DEBUG: TLS certificate verification disabled");
         }

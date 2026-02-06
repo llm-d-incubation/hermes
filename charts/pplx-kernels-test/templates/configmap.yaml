@@ -22,6 +22,10 @@ data:
     cd /tmp
     git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
     cd pplx-kernels
+    {{- if .Values.benchmark.pplxVersion }}
+    echo "Checking out pplx-kernels version {{ .Values.benchmark.pplxVersion }}..."
+    git checkout {{ .Values.benchmark.pplxVersion }}
+    {{- end }}
 
     echo "Installing pytest to /tmp..."
     pip install --target=/tmp pytest --quiet
@@ -31,7 +35,7 @@ data:
     DP_SIZE={{ .Values.benchmark.dpSize }}
     echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank 0-$((GPU_COUNT-1)))"
 
-    export MASTER_ADDR=pplx-kernels-master-${TEST_ID}
+    export MASTER_ADDR=pplx-kernels-${TEST_ID}-master-0-0.pplx-kernels-${TEST_ID}
     export MASTER_PORT={{ .Values.distributed.masterPort }}
     export WORLD_SIZE=$TOTAL_GPUS
     export WORLD_LOCAL_SIZE=$GPU_COUNT
@@ -58,6 +62,10 @@ data:
     cd /tmp
     git clone https://github.com/perplexityai/pplx-kernels.git || echo "Repository already exists"
     cd pplx-kernels
+    {{- if .Values.benchmark.pplxVersion }}
+    echo "Checking out pplx-kernels version {{ .Values.benchmark.pplxVersion }}..."
+    git checkout {{ .Values.benchmark.pplxVersion }}
+    {{- end }}
 
     echo "Installing pytest to /tmp..."
     pip install --target=/tmp pytest --quiet
@@ -65,7 +73,7 @@ data:
 
     {{- if .Values.benchmark.waitForWorker }}
     echo "Waiting for master to be ready..."
-    until getent hosts "pplx-kernels-master-${TEST_ID}"; do
+    until getent hosts "pplx-kernels-${TEST_ID}-master-0-0.pplx-kernels-${TEST_ID}"; do
       echo "Waiting for master service..."
       sleep 2
     done
@@ -76,7 +84,7 @@ data:
     DP_SIZE={{ .Values.benchmark.dpSize }}
     echo "Running all-to-all benchmark with world-size=$TOTAL_GPUS dp-size=$DP_SIZE (rank $GPU_COUNT-$((TOTAL_GPUS-1)))"
 
-    export MASTER_ADDR=pplx-kernels-master-${TEST_ID}
+    export MASTER_ADDR=pplx-kernels-${TEST_ID}-master-0-0.pplx-kernels-${TEST_ID}
     export MASTER_PORT={{ .Values.distributed.masterPort }}
     export WORLD_SIZE=$TOTAL_GPUS
     export WORLD_LOCAL_SIZE=$GPU_COUNT

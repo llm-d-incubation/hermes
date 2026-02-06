@@ -72,6 +72,9 @@ benchmark:
   waitForWorker: true
   workerWaitTimeout: 60  # seconds to wait for worker service discovery
 
+  # pin pplx-kernels to a specific commit/tag (empty = HEAD)
+  pplxVersion: ""
+
 # topology configuration - automatically injected by hermes select-nodes
 # this section describes the cluster topology and selected node pair
 topology:
