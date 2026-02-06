@@ -43,6 +43,41 @@ data:
     cd DeepEP
     git checkout {{ .Values.deepep.version | default "v1.2.1" }}
 
+    # patch bench_kineto to bypass kineto profiler when DEEPEP_SKIP_KINETO=1
+    if [ "${DEEPEP_SKIP_KINETO:-0}" = "1" ]; then
+      echo "Patching bench_kineto to skip kineto profiling..."
+      python3 << 'PYEOF'
+    with open('tests/utils.py', 'r') as f:
+        content = f.read()
+    bypass = """    if os.environ.get('DEEPEP_SKIP_KINETO', '0') == '1':
+            torch.cuda.synchronize()
+            for _ in range(10):
+                fn()
+            torch.cuda.synchronize()
+            _start = torch.cuda.Event(enable_timing=True)
+            _end = torch.cuda.Event(enable_timing=True)
+            _start.record()
+            for _ in range(num_tests):
+                fn()
+            _end.record()
+            torch.cuda.synchronize()
+            _t = _start.elapsed_time(_end) / num_tests / 1000.0
+            _is_tuple = not isinstance(kernel_names, str)
+            kernel_names = (kernel_names,) if isinstance(kernel_names, str) else kernel_names
+            if num_kernels_per_period > 1:
+                _per_k = _t / num_kernels_per_period
+                _result = [tuple(_per_k for _ in range(num_kernels_per_period)) for _ in kernel_names]
+            else:
+                _result = [_t for _ in kernel_names]
+            return _result if _is_tuple else _result[0]
+    """
+    content = content.replace('    # Profile\n', bypass + '    # Profile\n', 1)
+    with open('tests/utils.py', 'w') as f:
+        f.write(content)
+    print('Patched bench_kineto: kineto bypass enabled')
+    PYEOF
+    fi
+
     echo "Running DeepEP internode test with $GPU_COUNT processes per node, $WORLD_SIZE nodes total..."
     # use JobSet DNS for master pod discovery
     # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
@@ -117,6 +152,41 @@ data:
     git clone https://github.com/deepseek-ai/DeepEP || echo "Repository already exists"
     cd DeepEP
     git checkout {{ .Values.deepep.version | default "v1.2.1" }}
+
+    # patch bench_kineto to bypass kineto profiler when DEEPEP_SKIP_KINETO=1
+    if [ "${DEEPEP_SKIP_KINETO:-0}" = "1" ]; then
+      echo "Patching bench_kineto to skip kineto profiling..."
+      python3 << 'PYEOF'
+    with open('tests/utils.py', 'r') as f:
+        content = f.read()
+    bypass = """    if os.environ.get('DEEPEP_SKIP_KINETO', '0') == '1':
+            torch.cuda.synchronize()
+            for _ in range(10):
+                fn()
+            torch.cuda.synchronize()
+            _start = torch.cuda.Event(enable_timing=True)
+            _end = torch.cuda.Event(enable_timing=True)
+            _start.record()
+            for _ in range(num_tests):
+                fn()
+            _end.record()
+            torch.cuda.synchronize()
+            _t = _start.elapsed_time(_end) / num_tests / 1000.0
+            _is_tuple = not isinstance(kernel_names, str)
+            kernel_names = (kernel_names,) if isinstance(kernel_names, str) else kernel_names
+            if num_kernels_per_period > 1:
+                _per_k = _t / num_kernels_per_period
+                _result = [tuple(_per_k for _ in range(num_kernels_per_period)) for _ in kernel_names]
+            else:
+                _result = [_t for _ in kernel_names]
+            return _result if _is_tuple else _result[0]
+    """
+    content = content.replace('    # Profile\n', bypass + '    # Profile\n', 1)
+    with open('tests/utils.py', 'w') as f:
+        f.write(content)
+    print('Patched bench_kineto: kineto bypass enabled')
+    PYEOF
+    fi
 
     # JobSet's dependsOn ensures master is Ready before worker starts
     # add small delay for master to fully initialize torchrun rendezvous
@@ -328,17 +398,49 @@ data:
         NET1_INTERFACE="net1"
         NET2_INTERFACE="net1"
       else
-        echo "WARNING: No supported network interface mode found, using fallback"
-        # just find any RDMA device
+        echo "  Mode: bare InfiniBand (no SR-IOV interfaces detected)"
+        # detect the default TCP interface for NVSHMEM bootstrap
+        NET1_INTERFACE=$(ip route get 1 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
+        NET1_INTERFACE="${NET1_INTERFACE:-eth0}"
+        NET2_INTERFACE="$NET1_INTERFACE"
+        echo "  Bootstrap interface: $NET1_INTERFACE"
+
+        # enumerate all available IB devices
+        local all_ib_devs=()
         for dev in /sys/class/infiniband/*; do
           if [ -d "$dev" ]; then
-            NET1_RDMA_DEVICE=$(basename "$dev")
-            NET2_RDMA_DEVICE=$NET1_RDMA_DEVICE
-            echo "  Fallback: using $NET1_RDMA_DEVICE"
-            return 0
+            all_ib_devs+=("$(basename "$dev")")
           fi
         done
-        return 1
+
+        if [ "${#all_ib_devs[@]}" -eq 0 ]; then
+          echo "WARNING: No RDMA devices found"
+          return 1
+        fi
+
+        NET1_RDMA_DEVICE="${all_ib_devs[0]}"
+        NET2_RDMA_DEVICE="${all_ib_devs[0]}"
+        if [ "${#all_ib_devs[@]}" -ge 2 ]; then
+          NET2_RDMA_DEVICE="${all_ib_devs[1]}"
+        fi
+
+        ALL_RDMA_DEVICES=$(printf "%s:1," "${all_ib_devs[@]}")
+        ALL_RDMA_DEVICES="${ALL_RDMA_DEVICES%,}"
+
+        # auto-detect HCA prefix for NVSHMEM if not already set
+        # NVSHMEM defaults to "mlx5" but CoreWeave uses "ibp" naming
+        if [ -z "$NVSHMEM_HCA_PREFIX" ]; then
+          local prefix
+          prefix=$(echo "$NET1_RDMA_DEVICE" | sed 's/[0-9]*$//')
+          if [ "$prefix" != "mlx5_" ]; then
+            export NVSHMEM_HCA_PREFIX="$prefix"
+            echo "  Auto-detected NVSHMEM_HCA_PREFIX=$prefix"
+          fi
+        fi
+
+        echo "  Found ${#all_ib_devs[@]} IB devices: ${all_ib_devs[*]}"
+        echo "  Primary: $NET1_RDMA_DEVICE, Secondary: $NET2_RDMA_DEVICE"
+        return 0
       fi
 
       # detect rdma device for first interface (SR-IOV VF mode)

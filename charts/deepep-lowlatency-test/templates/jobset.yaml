@@ -131,6 +131,12 @@ spec:
               - name: SRIOV_INTERFACE
                 value: {{ .Values.sriov.interface | quote }}
               {{- end }}
+              {{- if .Values.nvshmem.hcaPrefix }}
+              - name: NVSHMEM_HCA_PREFIX
+                value: {{ .Values.nvshmem.hcaPrefix | quote }}
+              {{- end }}
+              - name: DEEPEP_SKIP_KINETO
+                value: "1"
               - name: NCCL_SOCKET_IFNAME
                 value: {{ .Values.sriov.interface | default "eth0" | quote }}
               - name: NCCL_DEBUG
@@ -252,6 +258,12 @@ spec:
               - name: SRIOV_INTERFACE
                 value: {{ .Values.sriov.interface | quote }}
               {{- end }}
+              {{- if .Values.nvshmem.hcaPrefix }}
+              - name: NVSHMEM_HCA_PREFIX
+                value: {{ .Values.nvshmem.hcaPrefix | quote }}
+              {{- end }}
+              - name: DEEPEP_SKIP_KINETO
+                value: "1"
               - name: NCCL_SOCKET_IFNAME
                 value: {{ .Values.sriov.interface | default "eth0" | quote }}
               - name: NCCL_DEBUG

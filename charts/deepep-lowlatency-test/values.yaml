@@ -66,6 +66,13 @@ ucx:
   # - "3": often required for RoCE v2
   gidIndex: "0"
 
+# NVSHMEM configuration
+nvshmem:
+  # HCA device prefix for NVSHMEM RDMA transport
+  # NVSHMEM only recognizes devices matching this prefix (default: "mlx5")
+  # CoreWeave IB nodes use "ibp" naming (ibp0-ibp7), so set to "ibp" for CoreWeave
+  hcaPrefix: ""
+
 # SR-IOV configuration (only for RoCE on OpenShift/SR-IOV platforms)
 sriov:
   # whether to enable SR-IOV network attachments

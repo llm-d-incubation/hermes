@@ -83,6 +83,13 @@ deepep:
     backend: torchrun
     masterPort: 29500
 
+# NVSHMEM configuration
+nvshmem:
+  # HCA device prefix for NVSHMEM RDMA transport
+  # NVSHMEM only recognizes devices matching this prefix (default: "mlx5")
+  # CoreWeave IB nodes use "ibp" naming (ibp0-ibp7), so set to "ibp" for CoreWeave
+  hcaPrefix: ""
+
 # SR-IOV network configuration (for RoCE deployments)
 # leave empty for InfiniBand
 sriov:

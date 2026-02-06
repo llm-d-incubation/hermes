@@ -124,6 +124,12 @@ spec:
                 value: {{ .Values.ucx.logLevel | quote }}
               - name: UCX_ERROR_SIGNALS
                 value: ""
+              {{- if .Values.nvshmem.hcaPrefix }}
+              - name: NVSHMEM_HCA_PREFIX
+                value: {{ .Values.nvshmem.hcaPrefix | quote }}
+              {{- end }}
+              - name: DEEPEP_SKIP_KINETO
+                value: "1"
               - name: POD_NAME
                 valueFrom:
                   fieldRef:
@@ -250,6 +256,10 @@ spec:
                 value: {{ $.Values.ucx.logLevel | quote }}
               - name: UCX_ERROR_SIGNALS
                 value: ""
+              {{- if $.Values.nvshmem.hcaPrefix }}
+              - name: NVSHMEM_HCA_PREFIX
+                value: {{ $.Values.nvshmem.hcaPrefix | quote }}
+              {{- end }}
               # use JobSet DNS for master discovery instead of separate Service
               # format: <jobset-name>-<replicatedJob>-<jobIndex>-<podIndex>.<jobset-name>
               - name: MASTER_ADDR
