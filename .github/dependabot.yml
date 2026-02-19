@@ -1,0 +1,57 @@
+version: 2
+updates:
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+    commit-message:
+      prefix: "deps(actions)"
+
+  # Docker base image updates (root Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+    commit-message:
+      prefix: "deps(docker)"
+
+  # Docker base image updates (hca-probe/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/hca-probe"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+    commit-message:
+      prefix: "deps(docker)"
+
+  # Docker base image updates (hca-probe/docker/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/hca-probe/docker"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+    commit-message:
+      prefix: "deps(docker)"
+
+  # Rust (Cargo) dependency updates
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+    commit-message:
+      prefix: "deps(cargo)"
