@@ -29,13 +29,13 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Upload hermes artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: hermes-linux-amd64
           path: dist/hermes
 
       - name: Upload hca-probe artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: hca-probe-linux-amd64
           path: dist/hca-probe
@@ -81,7 +81,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} -p hermes
 
       - name: Upload hermes artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset_name }}
           path: target/${{ matrix.target }}/release/hermes
