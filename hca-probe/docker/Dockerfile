@@ -35,7 +35,7 @@ RUN cargo build --release -p hca-probe && \
 # ============================================================================
 # Stage 2: CUDA perftest builder (from known working version)
 # ============================================================================
-FROM ubuntu:24.04 AS perftest-builder
+FROM ubuntu:26.04 AS perftest-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -97,7 +97,7 @@ RUN git clone https://github.com/linux-rdma/perftest.git /tmp/perftest && \
 # ============================================================================
 # Stage 3: Final runtime image with MLNX OFED
 # ============================================================================
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
