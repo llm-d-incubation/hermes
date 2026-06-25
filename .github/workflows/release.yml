@@ -13,7 +13,7 @@ jobs:
     name: Build Linux (UBI9)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -52,7 +52,7 @@ jobs:
             asset_name: hermes-darwin-arm64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -91,7 +91,7 @@ jobs:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v7
