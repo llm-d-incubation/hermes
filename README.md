@@ -33,7 +33,7 @@ sudo mv hermes hca-probe /usr/local/bin/
 ### From Source
 
 ```bash
-cargo install --path .
+cargo install --path hermes --locked
 ```
 
 ## Quick Start
@@ -43,7 +43,7 @@ cargo install --path .
 hermes scan
 
 # filter RDMA-capable nodes
-hermes scan --ib-only
+hermes scan --rdma-only
 
 # preview RDMA test manifests
 hermes self-test --dry-run
